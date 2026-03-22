@@ -1,35 +1,54 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import axios from 'axios';
 import { MintayParseResult } from '../../../shared/types/mintaySchema';
 import { SYSTEM_PROMPT, buildUserPrompt } from '../prompts/layoutPrompt';
 
 const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 
-function createClient(overrideApiKey?: string): GoogleGenerativeAI {
+function resolveApiKey(overrideApiKey?: string): string {
   const resolvedApiKey = overrideApiKey || process.env.GEMINI_API_KEY;
 
   if (!resolvedApiKey) {
     throw new Error('AI service unavailable');
   }
 
-  return new GoogleGenerativeAI(resolvedApiKey);
+  return resolvedApiKey;
 }
 
 async function requestLayout(code: string, mode?: string, apiKey?: string): Promise<string> {
-  const client = createClient(apiKey);
-
-  const model = client.getGenerativeModel({
-    model: modelName,
-    systemInstruction: SYSTEM_PROMPT,
-    generationConfig: {
-      temperature: 0.1,
-      topP: 0.8,
-      maxOutputTokens: 32000,
-      responseMimeType: 'application/json',
+  const resolvedApiKey = resolveApiKey(apiKey);
+  const response = await axios.post(
+    `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${resolvedApiKey}`,
+    {
+      system_instruction: {
+        parts: [{ text: SYSTEM_PROMPT }],
+      },
+      contents: [
+        {
+          parts: [{ text: buildUserPrompt(code, mode) }],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        topP: 0.8,
+        maxOutputTokens: 32000,
+        responseMimeType: 'application/json',
+      },
     },
-  });
+    {
+      timeout: 60000,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    },
+  );
 
-  const result = await model.generateContent(buildUserPrompt(code, mode));
-  return result.response.text().trim();
+  const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (typeof text !== 'string' || !text.trim()) {
+    throw new Error('Gemini returned no text content.');
+  }
+
+  return text.trim();
 }
 
 function parseResponse(text: string): MintayParseResult {
@@ -71,6 +90,18 @@ export const geminiService = {
         if (attempt === 1) {
           if (error instanceof SyntaxError) {
             throw new Error(`Gemini returned invalid JSON. Raw: ${lastRaw.slice(0, 300)}`);
+          }
+
+          if (axios.isAxiosError(error)) {
+            const apiMessage =
+              error.response?.data?.error?.message ||
+              error.response?.data?.message ||
+              error.message;
+            throw new Error(`Gemini API error: ${apiMessage}`);
+          }
+
+          if (error instanceof Error) {
+            throw new Error(`Gemini request failed: ${error.message}`);
           }
 
           throw new Error('AI service unavailable');
