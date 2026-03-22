@@ -28,6 +28,7 @@ export default defineConfig(({ mode }) => {
       root: rootDir,
       plugins: [inlineBuiltUi()],
       build: {
+        target: 'es2017',
         outDir: path.resolve(distDir, 'sandbox'),
         emptyOutDir: false,
         lib: {

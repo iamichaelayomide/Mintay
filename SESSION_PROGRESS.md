@@ -27,14 +27,23 @@ Last updated: 2026-03-22
   - localhost moved to `devAllowedDomains`
   - added `networkAccess.reasoning`
 
+## Figma runtime compatibility fix
+
+- Figma plugin runtime was failing on newer generated JavaScript syntax in the sandbox bundle
+- Fix applied in [`plugin/vite.config.ts`](C:/Users/DELL/mintay/plugin/vite.config.ts):
+  - sandbox build target set to `es2017`
+- Plugin bundle rebuilt after this fix
+- Next retry should use a freshly re-imported development plugin so Figma loads the new `dist` files
+
 ## What still needs to happen
 
 1. In Figma Desktop, import the plugin from [`plugin/manifest.json`](C:/Users/DELL/mintay/plugin/manifest.json)
 2. In the plugin settings:
    - Backend URL: `https://mintay.onrender.com`
    - Gemini API key: paste the real key
-3. Test a simple import in Figma
-4. If publishing to Community:
+3. If Mintay was already imported before the runtime fix, remove/re-import it so Figma stops using the old bundle
+4. Test a simple import in Figma
+5. If publishing to Community:
    - ensure 2FA is enabled
    - publish from Figma plugin management
    - complete listing details, icon, and cover assets
