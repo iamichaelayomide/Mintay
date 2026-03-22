@@ -33,6 +33,10 @@ export default function App() {
     resetState,
     handleBuildSuccess,
     handleBuildError,
+    toggleScreenSelection,
+    selectAllScreens,
+    clearSelectedScreens,
+    buildSelectedScreens,
   } = useImport();
 
   usePluginMessage({
@@ -142,15 +146,20 @@ export default function App() {
 
       <button
         className="primary-button"
-        disabled={state.status === 'loading'}
-        onClick={handleImport}
+        disabled={
+          state.status === 'loading' ||
+          (state.status === 'review' && state.selectedScreenIds.length === 0)
+        }
+        onClick={state.status === 'review' ? buildSelectedScreens : handleImport}
         type="button"
       >
         {state.status === 'loading' ? (
           <span className="button-content">
             <span className="spinner" />
-            Importing…
+            Importing...
           </span>
+        ) : state.status === 'review' ? (
+          `Import ${state.selectedScreenIds.length} Selected Screen(s)`
         ) : (
           'Import to Figma'
         )}
@@ -159,6 +168,26 @@ export default function App() {
       <section className="status-area">
         {state.status === 'loading' && (
           <ProgressBar label={state.statusText} progress={state.progress} />
+        )}
+
+        {state.status === 'review' && (
+          <div className="success-card">
+            <div className="success-header">
+              <div>
+                <h2>{state.screens.length} screen(s) detected</h2>
+                <p>Choose the screens you want to import from this repo parse.</p>
+              </div>
+            </div>
+
+            <ScreenPreview
+              onClearSelection={clearSelectedScreens}
+              onSelectAll={selectAllScreens}
+              onToggleScreen={toggleScreenSelection}
+              screens={state.screens}
+              selectedScreenIds={state.selectedScreenIds}
+              warnings={state.warnings}
+            />
+          </div>
         )}
 
         {state.status === 'error' && (
@@ -190,7 +219,7 @@ export default function App() {
 
         {state.status === 'idle' && (
           <div className="hint-card">
-            <p>Paste a page, component, or GitHub file URL and Mintay will rebuild the layout as editable Figma frames.</p>
+            <p>Paste a page, component, or GitHub repo URL and Mintay will detect screens before importing them as editable Figma frames.</p>
           </div>
         )}
       </section>
@@ -205,7 +234,8 @@ export default function App() {
         />
       )}
 
-      {state.status !== 'loading' && (state.status === 'success' || state.status === 'error') ? (
+      {state.status !== 'loading' &&
+      (state.status === 'success' || state.status === 'error' || state.status === 'review') ? (
         <button className="ghost-button" onClick={resetState} type="button">
           Reset status
         </button>

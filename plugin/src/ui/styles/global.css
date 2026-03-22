@@ -372,9 +372,30 @@ button {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.preview-card.selectable {
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.preview-card.selectable.active {
+  border-color: rgba(124, 106, 247, 0.55);
+  background: rgba(124, 106, 247, 0.1);
+}
+
+.preview-card.selectable:hover {
+  transform: translateY(-1px);
+}
+
 .preview-name {
   font-weight: 600;
   margin-bottom: 6px;
+}
+
+.preview-select-state {
+  margin-top: 8px;
+  color: var(--accent-2);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .warning-card {

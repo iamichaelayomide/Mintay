@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import type { MintayParseResult, MintayScreen } from '@shared/types/mintaySchema';
 
 export interface PluginSettings {
   apiKey: string;
@@ -12,7 +13,7 @@ interface ImportArgs {
   settings?: PluginSettings;
 }
 
-interface ScreenSummary {
+export interface ScreenSummary {
   name: string;
   width: number;
   height: number;
@@ -20,13 +21,14 @@ interface ScreenSummary {
 }
 
 interface ImportState {
-  status: 'idle' | 'loading' | 'success' | 'error';
+  status: 'idle' | 'loading' | 'review' | 'success' | 'error';
   progress: number;
   statusText: string;
   error: string | null;
   successCount: number;
   screens: ScreenSummary[];
   warnings: string[];
+  selectedScreenIds: number[];
 }
 
 const DEFAULT_BACKEND_URL = 'https://mintay.onrender.com';
@@ -46,6 +48,7 @@ const initialState: ImportState = {
   successCount: 0,
   screens: [],
   warnings: [],
+  selectedScreenIds: [],
 };
 
 function pluginMessageFromEvent(event: MessageEvent) {
@@ -123,8 +126,18 @@ function requestPluginData<T>(type: string, data?: unknown, expectedType?: strin
   });
 }
 
+function summarizeScreens(screens: MintayScreen[]): ScreenSummary[] {
+  return screens.map((screen) => ({
+    name: screen.name,
+    width: screen.width,
+    height: screen.height,
+    componentType: screen.componentType || 'DESKTOP',
+  }));
+}
+
 export function useImport() {
   const [state, setState] = useState<ImportState>(initialState);
+  const [pendingResult, setPendingResult] = useState<MintayParseResult | null>(null);
 
   const loadSettings = useCallback(async (): Promise<PluginSettings> => {
     const localSettings = readLocalSettings();
@@ -173,11 +186,13 @@ export function useImport() {
   }, []);
 
   const resetState = useCallback(() => {
+    setPendingResult(null);
     setState(initialState);
   }, []);
 
   const handleBuildSuccess = useCallback(
     (message: { count: number; warnings?: string[]; screens?: ScreenSummary[] }) => {
+      setPendingResult(null);
       setState({
         status: 'success',
         progress: 100,
@@ -186,6 +201,7 @@ export function useImport() {
         successCount: message.count,
         warnings: message.warnings || [],
         screens: message.screens || [],
+        selectedScreenIds: [],
       });
     },
     [],
@@ -207,6 +223,7 @@ export function useImport() {
       const trimmedUrl = githubUrl?.trim() || '';
 
       if (!trimmedCode && !trimmedUrl) {
+        setPendingResult(null);
         setState({
           ...initialState,
           status: 'error',
@@ -216,6 +233,7 @@ export function useImport() {
         return;
       }
 
+      setPendingResult(null);
       setState({
         ...initialState,
         status: 'loading',
@@ -235,7 +253,7 @@ export function useImport() {
         setState((current) => ({
           ...current,
           progress: 42,
-          statusText: 'Sending code to the Mintay parser. Larger files can take a bit longer...',
+          statusText: 'Parsing your repo into candidate screens. Larger imports can take a bit longer...',
         }));
 
         const response = await fetch(`${backendUrl.replace(/\/$/, '')}/parse`, {
@@ -252,33 +270,41 @@ export function useImport() {
           signal: controller.signal,
         });
 
-        const result = await response.json();
+        const result = (await response.json()) as MintayParseResult;
 
         if (!response.ok) {
           throw new Error(result.error || 'Mintay could not parse the provided input.');
         }
 
-        if (!result.success) {
-          throw new Error(result.error || 'Mintay could not parse the provided input.');
+        if (!result.success || !Array.isArray(result.screens) || result.screens.length === 0) {
+          throw new Error(result.error || 'Mintay could not find any screens in the provided input.');
         }
 
-        setState((current) => ({
-          ...current,
-          progress: 78,
-          statusText: 'Drawing editable frames in Figma...',
-        }));
+        const summaries = summarizeScreens(result.screens);
+        const selectedScreenIds = summaries.map((_screen, index) => index);
 
-        parent.postMessage({ pluginMessage: { type: 'BUILD_SCREENS', data: result } }, '*');
+        setPendingResult(result);
+        setState({
+          status: 'review',
+          progress: 100,
+          statusText: 'Review the detected screens and choose what to import.',
+          error: null,
+          successCount: 0,
+          screens: summaries,
+          warnings: result.warnings || [],
+          selectedScreenIds,
+        });
       } catch (error) {
         const message =
           error instanceof DOMException && error.name === 'AbortError'
-            ? 'Mintay waited too long for the parser. Try a candidate file or section if this keeps happening.'
+            ? 'Mintay waited too long for the parser. Try again or narrow the repo only if this keeps happening.'
             : error instanceof TypeError
               ? 'Connection failed. Check your Backend URL in settings.'
               : error instanceof Error
                 ? error.message
                 : 'Mintay hit an unexpected error.';
 
+        setPendingResult(null);
         setState({
           ...initialState,
           status: 'error',
@@ -292,6 +318,73 @@ export function useImport() {
     [loadSettings],
   );
 
+  const toggleScreenSelection = useCallback((screenId: number) => {
+    setState((current) => {
+      const exists = current.selectedScreenIds.includes(screenId);
+      return {
+        ...current,
+        selectedScreenIds: exists
+          ? current.selectedScreenIds.filter((id) => id !== screenId)
+          : [...current.selectedScreenIds, screenId].sort((left, right) => left - right),
+      };
+    });
+  }, []);
+
+  const selectAllScreens = useCallback(() => {
+    setState((current) => ({
+      ...current,
+      selectedScreenIds: current.screens.map((_screen, index) => index),
+    }));
+  }, []);
+
+  const clearSelectedScreens = useCallback(() => {
+    setState((current) => ({
+      ...current,
+      selectedScreenIds: [],
+    }));
+  }, []);
+
+  const buildSelectedScreens = useCallback(() => {
+    if (!pendingResult) {
+      return;
+    }
+
+    const selectedScreens = pendingResult.screens.filter((_screen, index) =>
+      state.selectedScreenIds.includes(index),
+    );
+
+    if (selectedScreens.length === 0) {
+      setState((current) => ({
+        ...current,
+        status: 'error',
+        error: 'Select at least one screen before importing to Figma.',
+        statusText: 'No screens selected.',
+      }));
+      return;
+    }
+
+    setState((current) => ({
+      ...current,
+      status: 'loading',
+      progress: 78,
+      error: null,
+      statusText: 'Drawing selected screens in Figma...',
+    }));
+
+    parent.postMessage(
+      {
+        pluginMessage: {
+          type: 'BUILD_SCREENS',
+          data: {
+            ...pendingResult,
+            screens: selectedScreens,
+          },
+        },
+      },
+      '*',
+    );
+  }, [pendingResult, state.selectedScreenIds]);
+
   return {
     state,
     startImport,
@@ -300,5 +393,9 @@ export function useImport() {
     resetState,
     handleBuildSuccess,
     handleBuildError,
+    toggleScreenSelection,
+    selectAllScreens,
+    clearSelectedScreens,
+    buildSelectedScreens,
   };
 }
