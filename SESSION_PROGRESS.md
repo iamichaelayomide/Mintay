@@ -69,6 +69,10 @@ Last updated: 2026-03-22
   - repo runtime preparation no longer depends on `api.github.com/repos/:owner/:repo` to discover the default branch
   - Mintay now tries direct repo archive downloads from `codeload.github.com` using branch candidates like `main`, `master`, `develop`, and `dev`
   - this avoids a common hosted 403 failure mode during repo preparation
+- Monorepo app-root fix:
+  - runtime preparation no longer picks the first `package.json` it finds
+  - Mintay now scores candidate package roots and prefers likely frontend apps over backend/server packages
+  - verified locally against `https://github.com/iamichaelayomide/Mintay`: prepare now selects `/plugin` with framework `vite` instead of `/backend`
 
 ## What still needs to happen
 

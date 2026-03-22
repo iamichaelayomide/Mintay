@@ -105,6 +105,7 @@ type GithubRepoTarget = {
 };
 
 type PackageJsonShape = {
+  private?: boolean;
   name?: string;
   scripts?: Record<string, string>;
   dependencies?: Record<string, string>;
@@ -273,6 +274,64 @@ function detectFramework(pkg: PackageJsonShape): string {
   return 'unknown';
 }
 
+function hasFrontendSignals(projectRoot: string, pkg: PackageJsonShape): number {
+  const deps = {
+    ...(pkg.dependencies || {}),
+    ...(pkg.devDependencies || {}),
+  };
+
+  let score = 0;
+  const framework = detectFramework(pkg);
+  const scripts = pkg.scripts || {};
+  const normalizedRoot = projectRoot.replace(/\\/g, '/').toLowerCase();
+  const name = (pkg.name || '').toLowerCase();
+
+  if (framework !== 'unknown') {
+    score += 50;
+  }
+
+  if (deps.react || deps['react-dom'] || deps.next || deps.vite || deps.vue || deps.nuxt || deps.svelte) {
+    score += 30;
+  }
+
+  if (scripts.dev) {
+    score += 15;
+  }
+
+  if (scripts.preview) {
+    score += 10;
+  }
+
+  if (
+    require('fs').existsSync(path.join(projectRoot, 'app')) ||
+    require('fs').existsSync(path.join(projectRoot, 'pages')) ||
+    require('fs').existsSync(path.join(projectRoot, 'src', 'app')) ||
+    require('fs').existsSync(path.join(projectRoot, 'src', 'pages')) ||
+    require('fs').existsSync(path.join(projectRoot, 'components')) ||
+    require('fs').existsSync(path.join(projectRoot, 'src', 'components'))
+  ) {
+    score += 20;
+  }
+
+  if (normalizedRoot.includes('/frontend') || normalizedRoot.includes('/web') || normalizedRoot.includes('/app')) {
+    score += 12;
+  }
+
+  if (normalizedRoot.includes('/backend') || normalizedRoot.includes('/server') || normalizedRoot.includes('/api')) {
+    score -= 35;
+  }
+
+  if (name.includes('backend') || name.includes('server') || name.includes('api')) {
+    score -= 30;
+  }
+
+  if (deps.express && !deps.react && !deps.next && !deps.vite && !deps.vue) {
+    score -= 20;
+  }
+
+  return score;
+}
+
 function detectDevCommand(pkg: PackageJsonShape, packageManager: 'npm' | 'pnpm' | 'yarn'): string | null {
   const scripts = pkg.scripts || {};
 
@@ -411,8 +470,20 @@ function hasWorkspaceConfig(pkg: PackageJsonShape) {
 
 async function findProjectRoot(extractRoot: string, subdir: string): Promise<string> {
   const desiredRoot = subdir ? path.join(extractRoot, subdir) : extractRoot;
+  const candidates: { root: string; score: number }[] = [];
   if (await fileExists(path.join(desiredRoot, 'package.json'))) {
-    return desiredRoot;
+    try {
+      const rootPkg = JSON.parse(await fs.readFile(path.join(desiredRoot, 'package.json'), 'utf8')) as PackageJsonShape;
+      candidates.push({
+        root: desiredRoot,
+        score: hasFrontendSignals(desiredRoot, rootPkg),
+      });
+    } catch {
+      candidates.push({
+        root: desiredRoot,
+        score: 0,
+      });
+    }
   }
 
   const queue = [desiredRoot];
@@ -431,11 +502,27 @@ async function findProjectRoot(extractRoot: string, subdir: string): Promise<str
 
       const nextPath = path.join(current, entry.name);
       if (await fileExists(path.join(nextPath, 'package.json'))) {
-        return nextPath;
+        try {
+          const pkg = JSON.parse(await fs.readFile(path.join(nextPath, 'package.json'), 'utf8')) as PackageJsonShape;
+          candidates.push({
+            root: nextPath,
+            score: hasFrontendSignals(nextPath, pkg),
+          });
+        } catch {
+          candidates.push({
+            root: nextPath,
+            score: 0,
+          });
+        }
       }
 
       queue.push(nextPath);
     }
+  }
+
+  if (candidates.length > 0) {
+    candidates.sort((left, right) => right.score - left.score);
+    return candidates[0].root;
   }
 
   throw new Error('Could not find a runnable package.json in the extracted repository.');
