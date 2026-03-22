@@ -197,6 +197,11 @@ button {
   padding: 12px;
 }
 
+.picker-card.drag-active {
+  border-color: rgba(95, 242, 200, 0.55);
+  background: rgba(95, 242, 200, 0.06);
+}
+
 .picker-title,
 .picker-summary {
   font-size: 12px;

@@ -1,3 +1,4 @@
+import type { DragEvent } from 'react';
 import { useMemo, useRef, useState } from 'react';
 
 interface DetectedSection {
@@ -52,6 +53,93 @@ function detectHtmlSections(source: string): DetectedSection[] {
   return sections;
 }
 
+function extractBalancedBlock(source: string, startIndex: number, openChar: string, closeChar: string): string | null {
+  let depth = 0;
+  let started = false;
+
+  for (let index = startIndex; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (char === openChar) {
+      depth += 1;
+      started = true;
+    } else if (char === closeChar && started) {
+      depth -= 1;
+
+      if (depth === 0) {
+        return source.slice(startIndex, index + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function detectReactSections(source: string): DetectedSection[] {
+  const sections: DetectedSection[] = [];
+  const patterns = [
+    /export\s+default\s+function\s+([A-Z][A-Za-z0-9_]*)\s*\(/g,
+    /export\s+function\s+([A-Z][A-Za-z0-9_]*)\s*\(/g,
+    /function\s+([A-Z][A-Za-z0-9_]*)\s*\(/g,
+    /const\s+([A-Z][A-Za-z0-9_]*)\s*=\s*\([^)]*\)\s*=>\s*{/g,
+    /const\s+([A-Z][A-Za-z0-9_]*)\s*=\s*\([^)]*\)\s*=>\s*\(/g,
+  ];
+
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+
+    while ((match = pattern.exec(source)) && sections.length < 8) {
+      const componentName = match[1];
+      const declarationIndex = match.index;
+      const bodyStart = source.indexOf('{', declarationIndex);
+      const jsxStart = source.indexOf('(', declarationIndex + match[0].length - 1);
+
+      let content = '';
+
+      if (bodyStart !== -1 && (jsxStart === -1 || bodyStart < jsxStart)) {
+        content = extractBalancedBlock(source, bodyStart, '{', '}') || '';
+        if (content) {
+          content = source.slice(declarationIndex, bodyStart) + content;
+        }
+      } else if (jsxStart !== -1) {
+        const jsxBlock = extractBalancedBlock(source, jsxStart, '(', ')') || '';
+        if (jsxBlock) {
+          content = source.slice(declarationIndex, jsxStart) + jsxBlock;
+        }
+      }
+
+      const trimmed = content.trim();
+      if (trimmed.length < 80) {
+        continue;
+      }
+
+      sections.push({
+        id: `component-${componentName}-${sections.length}`,
+        label: componentName,
+        content: trimmed,
+      });
+    }
+  }
+
+  return sections;
+}
+
+function detectSections(source: string): DetectedSection[] {
+  const reactSections = detectReactSections(source);
+  const htmlSections = detectHtmlSections(source);
+  const merged = [...reactSections, ...htmlSections];
+  const seen = new Set<string>();
+
+  return merged.filter((section) => {
+    if (seen.has(section.content)) {
+      return false;
+    }
+
+    seen.add(section.content);
+    return true;
+  }).slice(0, 10);
+}
+
 function formatFileSummary(files: File[]): string {
   if (files.length === 0) {
     return 'No files loaded yet.';
@@ -99,10 +187,11 @@ export default function CodeInput({
 }: CodeInputProps) {
   const [fileSummary, setFileSummary] = useState('No files loaded yet.');
   const [pickerError, setPickerError] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
-  const detectedSections = useMemo(() => detectHtmlSections(value), [value]);
+  const detectedSections = useMemo(() => detectSections(value), [value]);
   const selectedSectionId =
     selectedValue && detectedSections.find((section) => section.content === selectedValue)?.id;
 
@@ -128,6 +217,12 @@ export default function CodeInput({
     } catch (error) {
       setPickerError(error instanceof Error ? error.message : 'Could not read the selected files.');
     }
+  };
+
+  const handleDrop = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragActive(false);
+    await handleFilesChosen(event.dataTransfer.files);
   };
 
   return (
@@ -178,10 +273,21 @@ export default function CodeInput({
         } as React.InputHTMLAttributes<HTMLInputElement>)}
       />
 
-      <div className="picker-card">
+      <div
+        className={dragActive ? 'picker-card drag-active' : 'picker-card'}
+        onDragEnter={() => setDragActive(true)}
+        onDragLeave={() => setDragActive(false)}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setDragActive(true);
+        }}
+        onDrop={(event) => {
+          void handleDrop(event);
+        }}
+      >
         <div className="picker-title">Local files and folders</div>
         <p className="helper-text">
-          Pick a folder or a set of files and Mintay will combine supported frontend files automatically.
+          Pick or drop a folder, zip, or a set of files and Mintay will combine supported frontend files automatically.
         </p>
         <p className="picker-summary">{fileSummary}</p>
         {pickerError ? <p className="picker-error">{pickerError}</p> : null}
@@ -212,7 +318,7 @@ export default function CodeInput({
             ))}
           </div>
           <p className="helper-text">
-            Click a section to import just that part instead of the whole file.
+            Click a section to import just that part instead of the whole file. React components and large HTML regions are both detected.
           </p>
         </div>
       ) : null}
