@@ -1,0 +1,15 @@
+export type {
+  MintayAlignment,
+  MintayBorder,
+  MintayColor,
+  MintayFill,
+  MintayFontWeight,
+  MintayGradient,
+  MintayLayoutMode,
+  MintayNode,
+  MintayNodeType,
+  MintayParseResult,
+  MintayScreen,
+  MintayShadow,
+  MintayTextAlign,
+} from '../../../shared/types/mintaySchema';

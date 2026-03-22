@@ -1,0 +1,15 @@
+{
+  "name": "Mintay",
+  "id": "mintay-plugin-v1",
+  "api": "1.0.0",
+  "main": "dist/sandbox/index.js",
+  "ui": "dist/ui/index.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": [
+      "http://localhost:3001",
+      "https://mintay-api.yourdomain.com"
+    ]
+  },
+  "documentAccess": "dynamic-page"
+}
