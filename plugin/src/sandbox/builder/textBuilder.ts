@@ -21,9 +21,18 @@ export async function buildTextNode(node: MintayNode): Promise<TextNode> {
 
   text.characters = node.content || '';
   text.fontSize = node.fontSize || 14;
-  text.textAutoResize = 'NONE';
-  text.resize(Math.max(node.width, 8), Math.max(node.height, 8));
+  const requestedWidth = Math.max(node.width, 8);
+  const looksMultiline =
+    (node.content || '').includes('\n') ||
+    requestedWidth >= 160 ||
+    (node.lineHeight !== undefined && node.lineHeight > (node.fontSize || 14) * 1.35);
+
+  text.textAutoResize = looksMultiline ? 'HEIGHT' : 'WIDTH_AND_HEIGHT';
+  if (looksMultiline) {
+    text.resize(requestedWidth, Math.max(node.height, 8));
+  }
   text.textAlignHorizontal = node.textAlign || 'LEFT';
+  text.textAlignVertical = 'TOP';
 
   if (node.fontStyle === 'ITALIC') {
     text.fontName = { family: (text.fontName as FontName).family, style: 'Italic' };

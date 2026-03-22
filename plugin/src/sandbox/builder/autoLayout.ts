@@ -25,5 +25,5 @@ export function applyAutoLayout(frame: FrameNode, node: MintayNode): void {
   frame.paddingBottom = node.paddingBottom || 0;
   frame.paddingLeft = node.paddingLeft || 0;
   frame.primaryAxisSizingMode = 'AUTO';
-  frame.counterAxisSizingMode = 'FIXED';
+  frame.counterAxisSizingMode = 'AUTO';
 }

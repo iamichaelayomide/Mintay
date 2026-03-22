@@ -3,6 +3,16 @@ import { applyAutoLayout } from './autoLayout';
 import { buildNode } from './nodeBuilder';
 import { buildEffects, buildStrokePaints, buildSolidOrGradientFills, applyCornerRadius } from '../utils/colorUtils';
 
+function hasVisualStyling(node: MintayNode): boolean {
+  return Boolean(
+    (node.fills && node.fills.length) ||
+      (node.strokes && node.strokes.length) ||
+      (node.shadows && node.shadows.length) ||
+      node.cornerRadius !== undefined ||
+      (node.cornerRadii && node.cornerRadii.length),
+  );
+}
+
 export async function buildFrameNode(node: MintayNode): Promise<FrameNode> {
   const frame = figma.createFrame();
   frame.name = node.name;
@@ -37,6 +47,13 @@ export async function buildFrameNode(node: MintayNode): Promise<FrameNode> {
     frame.clipsContent = node.clipsContent;
   }
 
+  if (node.type === 'GROUP' && !hasVisualStyling(node)) {
+    frame.fills = [];
+    frame.strokes = [];
+    frame.effects = [];
+    frame.clipsContent = false;
+  }
+
   applyCornerRadius(frame, node.cornerRadius, node.cornerRadii);
 
   if (node.layoutMode && node.layoutMode !== 'NONE') {
@@ -55,6 +72,9 @@ export async function buildFrameNode(node: MintayNode): Promise<FrameNode> {
       if (node.layoutMode && node.layoutMode !== 'NONE') {
         childNode.x = 0;
         childNode.y = 0;
+        if ('layoutPositioning' in childNode) {
+          childNode.layoutPositioning = 'AUTO';
+        }
       }
     } catch (error) {
       console.warn(`Failed to build child node ${child.id}:`, error);
