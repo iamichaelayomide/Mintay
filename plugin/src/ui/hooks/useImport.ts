@@ -31,6 +31,7 @@ interface ImportState {
 
 const DEFAULT_BACKEND_URL = 'https://mintay.onrender.com';
 const SETTINGS_STORAGE_KEY = 'mintay_plugin_settings';
+const DEFAULT_PARSE_TIMEOUT_MS = 180000;
 
 const defaultSettings: PluginSettings = {
   apiKey: '',
@@ -134,10 +135,15 @@ export function useImport() {
         undefined,
         'SETTINGS_VALUE',
       );
-      return writeLocalSettings(mergeSettings({
-        apiKey: pluginSettings.apiKey || '',
-        backendUrl: pluginSettings.backendUrl?.trim() || DEFAULT_BACKEND_URL,
-      }, localSettings));
+      return writeLocalSettings(
+        mergeSettings(
+          {
+            apiKey: pluginSettings.apiKey || '',
+            backendUrl: pluginSettings.backendUrl?.trim() || DEFAULT_BACKEND_URL,
+          },
+          localSettings,
+        ),
+      );
     } catch {
       return localSettings;
     }
@@ -152,10 +158,15 @@ export function useImport() {
         normalized,
         'SETTINGS_SAVED',
       );
-      return writeLocalSettings(mergeSettings({
-        apiKey: pluginSettings.apiKey || '',
-        backendUrl: pluginSettings.backendUrl?.trim() || DEFAULT_BACKEND_URL,
-      }, normalized));
+      return writeLocalSettings(
+        mergeSettings(
+          {
+            apiKey: pluginSettings.apiKey || '',
+            backendUrl: pluginSettings.backendUrl?.trim() || DEFAULT_BACKEND_URL,
+          },
+          normalized,
+        ),
+      );
     } catch {
       return normalized;
     }
@@ -165,17 +176,20 @@ export function useImport() {
     setState(initialState);
   }, []);
 
-  const handleBuildSuccess = useCallback((message: { count: number; warnings?: string[]; screens?: ScreenSummary[] }) => {
-    setState({
-      status: 'success',
-      progress: 100,
-      statusText: 'Import complete.',
-      error: null,
-      successCount: message.count,
-      warnings: message.warnings || [],
-      screens: message.screens || [],
-    });
-  }, []);
+  const handleBuildSuccess = useCallback(
+    (message: { count: number; warnings?: string[]; screens?: ScreenSummary[] }) => {
+      setState({
+        status: 'success',
+        progress: 100,
+        statusText: 'Import complete.',
+        error: null,
+        successCount: message.count,
+        warnings: message.warnings || [],
+        screens: message.screens || [],
+      });
+    },
+    [],
+  );
 
   const handleBuildError = useCallback((message: { message?: string }) => {
     setState((current) => ({
@@ -206,7 +220,7 @@ export function useImport() {
         ...initialState,
         status: 'loading',
         progress: 12,
-        statusText: 'Loading local plugin settings…',
+        statusText: 'Loading local plugin settings...',
       });
 
       const settings = currentSettings
@@ -215,13 +229,13 @@ export function useImport() {
 
       const backendUrl = settings.backendUrl?.trim() || DEFAULT_BACKEND_URL;
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 30000);
+      const timeout = window.setTimeout(() => controller.abort(), DEFAULT_PARSE_TIMEOUT_MS);
 
       try {
         setState((current) => ({
           ...current,
           progress: 42,
-          statusText: 'Sending code to the Mintay parser…',
+          statusText: 'Sending code to the Mintay parser. Larger files can take a bit longer...',
         }));
 
         const response = await fetch(`${backendUrl.replace(/\/$/, '')}/parse`, {
@@ -251,14 +265,14 @@ export function useImport() {
         setState((current) => ({
           ...current,
           progress: 78,
-          statusText: 'Drawing editable frames in Figma…',
+          statusText: 'Drawing editable frames in Figma...',
         }));
 
         parent.postMessage({ pluginMessage: { type: 'BUILD_SCREENS', data: result } }, '*');
       } catch (error) {
         const message =
           error instanceof DOMException && error.name === 'AbortError'
-            ? 'This is taking longer than expected. Try with a smaller file.'
+            ? 'Mintay waited too long for the parser. Try a candidate file or section if this keeps happening.'
             : error instanceof TypeError
               ? 'Connection failed. Check your Backend URL in settings.'
               : error instanceof Error
