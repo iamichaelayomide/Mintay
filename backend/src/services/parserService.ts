@@ -1,3 +1,5 @@
+const MAX_PREPROCESSED_CHARS = 120000;
+
 export const parserService = {
   preProcess(code: string): string {
     let processed = code;
@@ -10,8 +12,8 @@ export const parserService = {
     processed = processed.replace(/:\s*[A-Za-z0-9_<>{}\[\]\s|&?,]+(?=[,)=;])/g, '');
     processed = processed.replace(/\n{3,}/g, '\n\n').trim();
 
-    if (processed.length > 100000) {
-      processed = `${processed.slice(0, 100000)}\n... [truncated]`;
+    if (processed.length > MAX_PREPROCESSED_CHARS) {
+      processed = `${processed.slice(0, MAX_PREPROCESSED_CHARS)}\n... [truncated]`;
     }
 
     return processed;

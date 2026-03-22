@@ -168,6 +168,7 @@ Identify all distinct screens or views in the code.
 For each screen, build a complete MintayNode tree representing the visual layout.
 Apply all parsing rules from your instructions.
 Respect the requested target mode when possible: ${mode}.
+The input may be a prioritized repository digest with a file manifest and truncated snippets. Use the manifest and the highest-signal files to infer the most likely full screens.
 Return only the JSON object. Nothing else.
 
 CODE:

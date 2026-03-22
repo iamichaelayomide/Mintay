@@ -36,9 +36,19 @@ interface GithubRepoResponse {
   default_branch: string;
 }
 
+interface ResolvedGithubFile {
+  path: string;
+  content: string;
+  score: number;
+}
+
 const GITHUB_API_BASE = 'https://api.github.com';
-const MAX_FETCHED_FILES = 24;
+const MAX_FETCHED_FILES = 40;
 const MAX_FILE_BYTES = 200_000;
+const MAX_REPO_CONTEXT_CHARS = 120_000;
+const MAX_EMBEDDED_FILES = 18;
+const PRIMARY_FILE_CHAR_LIMIT = 12_000;
+const SECONDARY_FILE_CHAR_LIMIT = 6_000;
 const INCLUDE_EXTENSIONS = new Set([
   '.tsx',
   '.ts',
@@ -167,6 +177,23 @@ function scorePath(path: string): number {
   return score;
 }
 
+function normalizeSnippet(content: string): string {
+  return content
+    .replace(/\r\n/g, '\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function trimSnippet(content: string, limit: number): string {
+  if (content.length <= limit) {
+    return content;
+  }
+
+  return `${content.slice(0, limit)}\n/* truncated */`;
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await axios.get<T>(url, {
     timeout: 15000,
@@ -211,7 +238,7 @@ async function listContents(
     .filter(Boolean)
     .map((part) => encodeURIComponent(part))
     .join('/');
-  const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/contents/${encodedPath}${encodedPath ? '' : ''}?ref=${encodeURIComponent(branch)}`;
+  const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(branch)}`;
   const data = await fetchJson<GithubContentItem[] | GithubContentItem>(url);
   return Array.isArray(data) ? data : [data];
 }
@@ -255,10 +282,50 @@ async function collectFilesFromDirectory(
     .slice(0, MAX_FETCHED_FILES);
 }
 
-function combineFiles(files: Array<{ path: string; content: string }>): string {
-  return files
-    .map((file) => `// File: ${file.path}\n${file.content.trim()}\n`)
-    .join('\n\n');
+function buildRepoDigest(files: ResolvedGithubFile[]): string {
+  const prioritizedFiles = [...files]
+    .sort((left, right) => right.score - left.score)
+    .slice(0, MAX_EMBEDDED_FILES);
+
+  const totalFileCount = files.length;
+  let remainingBudget = MAX_REPO_CONTEXT_CHARS;
+  const sections: string[] = [];
+
+  const manifest = prioritizedFiles
+    .map((file, index) => `${index + 1}. ${file.path}`)
+    .join('\n');
+
+  const header = [
+    '/* Mintay GitHub repo digest */',
+    `Included files: ${prioritizedFiles.length} of ${totalFileCount}`,
+    'Prioritized file manifest:',
+    manifest,
+    '',
+  ].join('\n');
+
+  sections.push(header);
+  remainingBudget -= header.length;
+
+  prioritizedFiles.forEach((file, index) => {
+    if (remainingBudget <= 0) {
+      return;
+    }
+
+    const fileLimit = index < 6 ? PRIMARY_FILE_CHAR_LIMIT : SECONDARY_FILE_CHAR_LIMIT;
+    const normalized = normalizeSnippet(file.content);
+    const trimmed = trimSnippet(normalized, Math.min(fileLimit, remainingBudget));
+    const block = `// File: ${file.path}\n${trimmed}\n`;
+
+    sections.push(block);
+    remainingBudget -= block.length + 2;
+  });
+
+  const omittedCount = Math.max(0, totalFileCount - prioritizedFiles.length);
+  if (omittedCount > 0 && remainingBudget > 40) {
+    sections.push(`/* ${omittedCount} additional supported files omitted after prioritization */`);
+  }
+
+  return sections.join('\n\n');
 }
 
 export const githubService = {
@@ -296,11 +363,12 @@ export const githubService = {
         const resolvedFiles = await Promise.all(
           files.map(async (file) => ({
             path: file.path,
+            score: scorePath(file.path),
             content: await fetchText(file.download_url || ''),
           })),
         );
 
-        return combineFiles(resolvedFiles);
+        return buildRepoDigest(resolvedFiles);
       }
 
       throw new Error('Unsupported GitHub URL.');
