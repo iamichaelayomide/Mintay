@@ -296,12 +296,12 @@ function resolveLaunchStrategies(
         label: 'Next.js dev with explicit host/port flags',
         command: getScriptRunner(packageManager, preferredScript, [
           '--hostname',
-          '0.0.0.0',
+          '127.0.0.1',
           '--port',
           String(port),
         ]),
         env: {
-          HOSTNAME: '0.0.0.0',
+          HOSTNAME: '127.0.0.1',
         },
       });
     } else if (framework === 'vite' || framework === 'vue') {
@@ -309,7 +309,7 @@ function resolveLaunchStrategies(
         label: 'Vite-compatible dev with explicit host/port flags',
         command: getScriptRunner(packageManager, preferredScript, [
           '--host',
-          '0.0.0.0',
+          '127.0.0.1',
           '--port',
           String(port),
         ]),
@@ -319,7 +319,7 @@ function resolveLaunchStrategies(
         label: 'Angular dev with explicit host/port flags',
         command: getScriptRunner(packageManager, preferredScript, [
           '--host',
-          '0.0.0.0',
+          '127.0.0.1',
           '--port',
           String(port),
         ]),
@@ -330,8 +330,8 @@ function resolveLaunchStrategies(
       label: 'Script with env-based host/port injection',
       command: getScriptRunner(packageManager, preferredScript),
       env: {
-        HOST: '0.0.0.0',
-        HOSTNAME: '0.0.0.0',
+        HOST: '127.0.0.1',
+        HOSTNAME: '127.0.0.1',
       },
     });
   }
@@ -340,7 +340,7 @@ function resolveLaunchStrategies(
     strategies.push({
       label: 'Build and preview fallback',
       setupCommand: getScriptRunner(packageManager, 'build'),
-      command: getScriptRunner(packageManager, 'preview', ['--host', '0.0.0.0', '--port', String(port)]),
+      command: getScriptRunner(packageManager, 'preview', ['--host', '127.0.0.1', '--port', String(port)]),
     });
   }
 
@@ -824,8 +824,8 @@ async function attemptLaunchStrategy(
       ...session.envOverrides,
       ...(strategy.env || {}),
       PORT: String(session.port),
-      HOST: '0.0.0.0',
-      HOSTNAME: '0.0.0.0',
+      HOST: '127.0.0.1',
+      HOSTNAME: '127.0.0.1',
       BROWSER: 'none',
       CI: '1',
     },

@@ -61,6 +61,10 @@ Last updated: 2026-03-22
   - framework-aware strategies now try explicit host/port flags for Next.js, Vite-compatible apps, and Angular
   - a `build + preview` fallback is attempted when the repo exposes both scripts
   - launch failures now log each attempted strategy before returning the final timeout/startup error
+- Hosted runtime binding fix:
+  - repo preview strategies now bind to `127.0.0.1` instead of `0.0.0.0`
+  - this keeps child preview ports internal to the Render container instead of exposing extra ports like `3200` to the platform scanner
+  - backend now sets `trust proxy` for Render so express-rate-limit stops warning on forwarded requests
 
 ## What still needs to happen
 

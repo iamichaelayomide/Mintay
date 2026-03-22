@@ -8,6 +8,7 @@ import { parseRoute } from './routes/parse';
 import { repoRuntimeRoute } from './routes/repoRuntime';
 
 const app = express();
+app.set('trust proxy', 1);
 
 app.use(helmet());
 app.use(
