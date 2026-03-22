@@ -1,5 +1,6 @@
 import type { DragEvent } from 'react';
 import { useMemo, useRef, useState } from 'react';
+import { parse } from '@babel/parser';
 import JSZip from 'jszip';
 
 interface DetectedSection {
@@ -94,52 +95,120 @@ function extractBalancedBlock(source: string, startIndex: number, openChar: stri
   return null;
 }
 
-function detectReactSections(source: string): DetectedSection[] {
-  const sections: DetectedSection[] = [];
-  const patterns = [
-    /export\s+default\s+function\s+([A-Z][A-Za-z0-9_]*)\s*\(/g,
-    /export\s+function\s+([A-Z][A-Za-z0-9_]*)\s*\(/g,
-    /function\s+([A-Z][A-Za-z0-9_]*)\s*\(/g,
-    /const\s+([A-Z][A-Za-z0-9_]*)\s*=\s*\([^)]*\)\s*=>\s*{/g,
-    /const\s+([A-Z][A-Za-z0-9_]*)\s*=\s*\([^)]*\)\s*=>\s*\(/g,
-  ];
+function isPascalCase(value: string): boolean {
+  return /^[A-Z][A-Za-z0-9_]*$/.test(value);
+}
 
-  for (const pattern of patterns) {
-    let match: RegExpExecArray | null;
-
-    while ((match = pattern.exec(source)) && sections.length < 8) {
-      const componentName = match[1];
-      const declarationIndex = match.index;
-      const bodyStart = source.indexOf('{', declarationIndex);
-      const jsxStart = source.indexOf('(', declarationIndex + match[0].length - 1);
-
-      let content = '';
-
-      if (bodyStart !== -1 && (jsxStart === -1 || bodyStart < jsxStart)) {
-        content = extractBalancedBlock(source, bodyStart, '{', '}') || '';
-        if (content) {
-          content = source.slice(declarationIndex, bodyStart) + content;
-        }
-      } else if (jsxStart !== -1) {
-        const jsxBlock = extractBalancedBlock(source, jsxStart, '(', ')') || '';
-        if (jsxBlock) {
-          content = source.slice(declarationIndex, jsxStart) + jsxBlock;
-        }
-      }
-
-      const trimmed = content.trim();
-      if (trimmed.length < 80) {
-        continue;
-      }
-
-      sections.push({
-        id: `component-${componentName}-${sections.length}`,
-        label: componentName,
-        content: trimmed,
-      });
-    }
+function collectJsxLikeReturn(node: unknown): boolean {
+  if (!node || typeof node !== 'object') {
+    return false;
   }
 
+  const candidate = node as { type?: string; body?: unknown };
+
+  if (
+    candidate.type === 'JSXElement' ||
+    candidate.type === 'JSXFragment' ||
+    candidate.type === 'CallExpression'
+  ) {
+    return true;
+  }
+
+  if (candidate.type === 'BlockStatement' && Array.isArray(candidate.body)) {
+    return candidate.body.some((statement) => {
+      if (!statement || typeof statement !== 'object') {
+        return false;
+      }
+
+      const typedStatement = statement as { type?: string; argument?: unknown };
+      return typedStatement.type === 'ReturnStatement' && collectJsxLikeReturn(typedStatement.argument);
+    });
+  }
+
+  return false;
+}
+
+function detectReactSections(source: string): DetectedSection[] {
+  const sections: DetectedSection[] = [];
+  let ast: any;
+
+  try {
+    ast = parse(source, {
+      sourceType: 'unambiguous',
+      errorRecovery: true,
+      plugins: ['jsx', 'typescript'],
+    });
+  } catch {
+    return sections;
+  }
+
+  const pushComponent = (name: string, node: { start?: number | null; end?: number | null }, bodyNode?: unknown) => {
+    if (!isPascalCase(name) || !collectJsxLikeReturn(bodyNode)) {
+      return;
+    }
+
+    const start = typeof node.start === 'number' ? node.start : null;
+    const end = typeof node.end === 'number' ? node.end : null;
+
+    if (start === null || end === null || end <= start) {
+      return;
+    }
+
+    const content = source.slice(start, end).trim();
+    if (content.length < 80) {
+      return;
+    }
+
+    sections.push({
+      id: `component-${name}-${sections.length}`,
+      label: name,
+      content,
+    });
+  };
+
+  const visit = (node: any) => {
+    if (!node || typeof node !== 'object' || sections.length >= 8) {
+      return;
+    }
+
+    if (node.type === 'FunctionDeclaration' && node.id?.name) {
+      pushComponent(node.id.name, node, node.body);
+    }
+
+    if (node.type === 'VariableDeclarator' && node.id?.type === 'Identifier' && node.init) {
+      const initType = node.init.type;
+      if (initType === 'ArrowFunctionExpression' || initType === 'FunctionExpression') {
+        pushComponent(node.id.name, node, node.init.body);
+      }
+    }
+
+    if (node.type === 'ExportDefaultDeclaration' && node.declaration) {
+      const declaration = node.declaration;
+      if (declaration.type === 'FunctionDeclaration' && declaration.id?.name) {
+        pushComponent(declaration.id.name, node, declaration.body);
+      }
+      if (
+        declaration.type === 'ArrowFunctionExpression' ||
+        declaration.type === 'FunctionExpression'
+      ) {
+        pushComponent('DefaultExport', node, declaration.body);
+      }
+    }
+
+    Object.keys(node).forEach((key) => {
+      const value = node[key];
+      if (Array.isArray(value)) {
+        value.forEach((item) => visit(item));
+        return;
+      }
+
+      if (value && typeof value === 'object' && key !== 'loc') {
+        visit(value);
+      }
+    });
+  };
+
+  visit(ast.program);
   return sections;
 }
 
