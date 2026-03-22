@@ -85,6 +85,13 @@ function writeLocalSettings(settings: PluginSettings): PluginSettings {
   return normalized;
 }
 
+function mergeSettings(primary: PluginSettings, fallback: PluginSettings): PluginSettings {
+  return {
+    apiKey: primary.apiKey || fallback.apiKey || '',
+    backendUrl: primary.backendUrl?.trim() || fallback.backendUrl || DEFAULT_BACKEND_URL,
+  };
+}
+
 function requestPluginData<T>(type: string, data?: unknown, expectedType?: string): Promise<T> {
   const requestId = `${type}_${crypto.randomUUID()}`;
 
@@ -118,18 +125,20 @@ export function useImport() {
   const [state, setState] = useState<ImportState>(initialState);
 
   const loadSettings = useCallback(async (): Promise<PluginSettings> => {
+    const localSettings = readLocalSettings();
+
     try {
       const pluginSettings = await requestPluginData<PluginSettings>(
         'GET_SETTINGS',
         undefined,
         'SETTINGS_VALUE',
       );
-      return writeLocalSettings({
+      return writeLocalSettings(mergeSettings({
         apiKey: pluginSettings.apiKey || '',
         backendUrl: pluginSettings.backendUrl?.trim() || DEFAULT_BACKEND_URL,
-      });
+      }, localSettings));
     } catch {
-      return readLocalSettings();
+      return localSettings;
     }
   }, []);
 
@@ -142,10 +151,10 @@ export function useImport() {
         normalized,
         'SETTINGS_SAVED',
       );
-      return writeLocalSettings({
+      return writeLocalSettings(mergeSettings({
         apiKey: pluginSettings.apiKey || '',
         backendUrl: pluginSettings.backendUrl?.trim() || DEFAULT_BACKEND_URL,
-      });
+      }, normalized));
     } catch {
       return normalized;
     }
