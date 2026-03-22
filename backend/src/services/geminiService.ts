@@ -3,6 +3,7 @@ import { MintayParseResult } from '../../../shared/types/mintaySchema';
 import { SYSTEM_PROMPT, buildUserPrompt } from '../prompts/layoutPrompt';
 
 const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+const GEMINI_TIMEOUT_MS = 600000;
 
 function resolveApiKey(overrideApiKey?: string): string {
   const resolvedApiKey = overrideApiKey || process.env.GEMINI_API_KEY;
@@ -35,7 +36,7 @@ async function requestLayout(code: string, mode?: string, apiKey?: string): Prom
       },
     },
     {
-      timeout: 60000,
+      timeout: GEMINI_TIMEOUT_MS,
       headers: {
         'Content-Type': 'application/json',
       },
