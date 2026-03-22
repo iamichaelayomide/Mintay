@@ -7,8 +7,11 @@
   "editorType": ["figma"],
   "networkAccess": {
     "allowedDomains": [
-      "http://localhost:3001",
       "https://mintay.onrender.com"
+    ],
+    "reasoning": "Mintay sends pasted code or GitHub file imports to its hosted backend API for parsing into Figma-ready layout data.",
+    "devAllowedDomains": [
+      "http://localhost:3001"
     ]
   },
   "documentAccess": "dynamic-page"
