@@ -1,5 +1,6 @@
 import { Request, Response, Router } from 'express';
 import { repoRuntimeService } from '../services/repoRuntimeService';
+import { runtimeExtractService } from '../services/runtimeExtractService';
 
 export const repoRuntimeRoute = Router();
 
@@ -57,6 +58,31 @@ repoRuntimeRoute.post('/stop', async (req: Request, res: Response) => {
     return res.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not stop repository runtime.';
+    return res.status(500).json({ success: false, error: message });
+  }
+});
+
+repoRuntimeRoute.post('/extract', async (req: Request, res: Response) => {
+  try {
+    const { repoId, mode, routePath } = req.body as {
+      repoId?: string;
+      mode?: string;
+      routePath?: string;
+    };
+
+    if (!repoId) {
+      return res.status(400).json({ success: false, error: 'Provide a repoId.' });
+    }
+
+    const status = repoRuntimeService.getStatus(repoId);
+    if (status.status !== 'running' || !status.previewUrl) {
+      return res.status(400).json({ success: false, error: 'Repository preview is not running yet.' });
+    }
+
+    const result = await runtimeExtractService.extractFromUrl(status.previewUrl, mode, routePath);
+    return res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not extract runtime layout.';
     return res.status(500).json({ success: false, error: message });
   }
 });
