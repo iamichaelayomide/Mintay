@@ -28,7 +28,13 @@ interface ImportState {
   warnings: string[];
 }
 
-const DEFAULT_BACKEND_URL = 'http://localhost:3001';
+const DEFAULT_BACKEND_URL = 'https://mintay.onrender.com';
+const SETTINGS_STORAGE_KEY = 'mintay_plugin_settings';
+
+const defaultSettings: PluginSettings = {
+  apiKey: '',
+  backendUrl: DEFAULT_BACKEND_URL,
+};
 
 const initialState: ImportState = {
   status: 'idle',
@@ -42,6 +48,41 @@ const initialState: ImportState = {
 
 function pluginMessageFromEvent(event: MessageEvent) {
   return event.data?.pluginMessage;
+}
+
+function readLocalSettings(): PluginSettings {
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (!raw) {
+      return defaultSettings;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<PluginSettings>;
+    return {
+      apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '',
+      backendUrl:
+        typeof parsed.backendUrl === 'string' && parsed.backendUrl.trim()
+          ? parsed.backendUrl
+          : DEFAULT_BACKEND_URL,
+    };
+  } catch {
+    return defaultSettings;
+  }
+}
+
+function writeLocalSettings(settings: PluginSettings): PluginSettings {
+  const normalized = {
+    apiKey: settings.apiKey || '',
+    backendUrl: settings.backendUrl?.trim() || DEFAULT_BACKEND_URL,
+  };
+
+  try {
+    window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+  } catch {
+    return normalized;
+  }
+
+  return normalized;
 }
 
 function requestPluginData<T>(type: string, data?: unknown, expectedType?: string): Promise<T> {
@@ -77,11 +118,37 @@ export function useImport() {
   const [state, setState] = useState<ImportState>(initialState);
 
   const loadSettings = useCallback(async (): Promise<PluginSettings> => {
-    return requestPluginData<PluginSettings>('GET_SETTINGS', undefined, 'SETTINGS_VALUE');
+    try {
+      const pluginSettings = await requestPluginData<PluginSettings>(
+        'GET_SETTINGS',
+        undefined,
+        'SETTINGS_VALUE',
+      );
+      return writeLocalSettings({
+        apiKey: pluginSettings.apiKey || '',
+        backendUrl: pluginSettings.backendUrl?.trim() || DEFAULT_BACKEND_URL,
+      });
+    } catch {
+      return readLocalSettings();
+    }
   }, []);
 
   const saveSettings = useCallback(async (settings: PluginSettings): Promise<PluginSettings> => {
-    return requestPluginData<PluginSettings>('SAVE_SETTINGS', settings, 'SETTINGS_SAVED');
+    const normalized = writeLocalSettings(settings);
+
+    try {
+      const pluginSettings = await requestPluginData<PluginSettings>(
+        'SAVE_SETTINGS',
+        normalized,
+        'SETTINGS_SAVED',
+      );
+      return writeLocalSettings({
+        apiKey: pluginSettings.apiKey || '',
+        backendUrl: pluginSettings.backendUrl?.trim() || DEFAULT_BACKEND_URL,
+      });
+    } catch {
+      return normalized;
+    }
   }, []);
 
   const resetState = useCallback(() => {
@@ -132,19 +199,7 @@ export function useImport() {
         statusText: 'Loading local plugin settings…',
       });
 
-      let settings: PluginSettings;
-
-      try {
-        settings = await loadSettings();
-      } catch {
-        setState({
-          ...initialState,
-          status: 'error',
-          error: 'Could not load plugin settings.',
-          statusText: 'Settings unavailable.',
-        });
-        return;
-      }
+      const settings = await loadSettings();
 
       if (!settings.apiKey) {
         setState({
