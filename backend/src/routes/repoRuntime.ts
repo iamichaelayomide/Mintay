@@ -36,6 +36,22 @@ repoRuntimeRoute.post('/launch', async (req: Request, res: Response) => {
   }
 });
 
+repoRuntimeRoute.post('/preflight', async (req: Request, res: Response) => {
+  try {
+    const { repoId } = req.body as { repoId?: string };
+
+    if (!repoId) {
+      return res.status(400).json({ success: false, error: 'Provide a repoId.' });
+    }
+
+    const result = await repoRuntimeService.preflight(repoId);
+    return res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not preflight repository runtime.';
+    return res.status(500).json({ success: false, error: message });
+  }
+});
+
 repoRuntimeRoute.get('/status/:repoId', (req: Request<{ repoId: string }>, res: Response) => {
   try {
     const result = repoRuntimeService.getStatus(req.params.repoId);

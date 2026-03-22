@@ -31,6 +31,23 @@ interface ImportState {
   selectedScreenIds: number[];
 }
 
+interface RuntimeIssue {
+  code: string;
+  severity: 'info' | 'warning' | 'error';
+  message: string;
+  details?: string;
+}
+
+interface RepoPreflightResult {
+  success?: boolean;
+  repoId?: string;
+  readiness?: 'ready' | 'limited' | 'needs_input' | 'blocked';
+  envVarNames?: string[];
+  issues?: RuntimeIssue[];
+  warnings?: string[];
+  error?: string;
+}
+
 const DEFAULT_BACKEND_URL = 'https://mintay.onrender.com';
 const SETTINGS_STORAGE_KEY = 'mintay_plugin_settings';
 const DEFAULT_PARSE_TIMEOUT_MS = 1800000;
@@ -151,6 +168,21 @@ function isGithubRepoRuntimeCandidate(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+function formatRuntimeIssues(issues: RuntimeIssue[] | undefined, warnings: string[] | undefined) {
+  const parts: string[] = [];
+
+  for (const issue of issues || []) {
+    const detail = issue.details ? ` ${issue.details}` : '';
+    parts.push(`${issue.message}${detail}`);
+  }
+
+  for (const warning of warnings || []) {
+    parts.push(warning);
+  }
+
+  return parts.join(' ');
 }
 
 export function useImport() {
@@ -300,8 +332,41 @@ export function useImport() {
 
           setState((current) => ({
             ...current,
+            progress: 36,
+            statusText: 'Checking launch blockers before installing the repo...',
+          }));
+
+          const preflightResponse = await fetch(`${backendUrl.replace(/\/$/, '')}/repo-runtime/preflight`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              repoId: prepared.repoId,
+            }),
+            signal: controller.signal,
+          });
+
+          const preflight = (await preflightResponse.json()) as RepoPreflightResult;
+
+          if (!preflightResponse.ok || !preflight.success) {
+            throw new Error(preflight.error || 'Mintay could not preflight the repository runtime.');
+          }
+
+          if (preflight.readiness === 'blocked') {
+            throw new Error(
+              formatRuntimeIssues(preflight.issues, preflight.warnings) ||
+                'This repo is blocked from runtime launch until the preflight issues are fixed.',
+            );
+          }
+
+          setState((current) => ({
+            ...current,
             progress: 48,
-            statusText: 'Installing dependencies and starting a live preview...',
+            statusText:
+              preflight.readiness === 'needs_input'
+                ? 'The repo likely needs environment variables. Mintay is trying the launch anyway...'
+                : 'Installing dependencies and starting a live preview...',
           }));
 
           const launchResponse = await fetch(`${backendUrl.replace(/\/$/, '')}/repo-runtime/launch`, {
@@ -322,7 +387,12 @@ export function useImport() {
           };
 
           if (!launchResponse.ok || !launched.success || !launched.repoId) {
-            throw new Error(launched.error || 'Mintay could not launch the repository preview.');
+            const preflightContext = formatRuntimeIssues(preflight.issues, preflight.warnings);
+            throw new Error(
+              [launched.error || 'Mintay could not launch the repository preview.', preflightContext]
+                .filter(Boolean)
+                .join(' '),
+            );
           }
 
           setState((current) => ({

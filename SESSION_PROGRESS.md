@@ -43,6 +43,14 @@ Last updated: 2026-03-22
 - Runtime-execution pivot started: backend now has a `/repo-runtime/prepare` path that downloads a GitHub repo archive, extracts it to a temp workspace, detects package manager/framework/dev command, and lists candidate route files for the next runner step
 - Runtime runner expanded: backend now has `/repo-runtime/launch`, `/repo-runtime/status/:repoId`, and `/repo-runtime/stop` endpoints to install dependencies, start a prepared repo on a local preview port, and track logs/status for the next DOM-extraction phase
 - Runtime DOM extraction added: backend now has `/repo-runtime/extract`, backed by Playwright, which can visit a running preview URL/route and turn the rendered DOM into Mintay screens. Smoke-tested successfully against `https://example.com`
+- Runtime preflight added: backend now has `/repo-runtime/preflight`, which classifies likely launch blockers before install/start
+- Preflight currently flags:
+  - missing `dev` / `start` scripts
+  - likely required environment variables from `.env.example` and source references
+  - unknown framework detection
+  - workspace/monorepo roots
+  - missing lockfiles
+- Plugin GitHub runtime flow now calls preflight before launch and surfaces classified errors instead of a generic runtime failure
 
 ## What still needs to happen
 
@@ -61,6 +69,8 @@ Last updated: 2026-03-22
 
 - `POST /parse` returns `AI service unavailable` when called with an invalid or fake API key
 - This means the backend route is live; successful parsing still depends on a valid Gemini API key
+- Runtime render is the right path for near-pixel-perfect extraction, but some repos will still fail if they need private env vars, a more specific monorepo package root, or a non-standard launch command
+- The new preflight step should make those failures much more explainable before Mintay tries to boot the repo
 
 ## Resume prompt
 

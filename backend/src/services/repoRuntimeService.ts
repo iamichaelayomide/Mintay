@@ -30,6 +30,39 @@ interface RepoPrepareResult {
   warnings: string[];
 }
 
+interface RuntimeIssue {
+  code:
+    | 'missing_script'
+    | 'missing_env'
+    | 'unknown_framework'
+    | 'monorepo'
+    | 'missing_lockfile'
+    | 'large_repo'
+    | 'install_failed'
+    | 'preview_start_failed'
+    | 'preview_timeout';
+  severity: 'info' | 'warning' | 'error';
+  message: string;
+  details?: string;
+}
+
+type RuntimeIssueCode = RuntimeIssue['code'];
+
+interface RepoPreflightResult {
+  success: boolean;
+  repoId: string;
+  readiness: 'ready' | 'limited' | 'needs_input' | 'blocked';
+  framework: string;
+  packageManager: 'npm' | 'pnpm' | 'yarn';
+  projectRoot: string;
+  installCommand: string;
+  devCommand: string | null;
+  routeCandidates: string[];
+  envVarNames: string[];
+  issues: RuntimeIssue[];
+  warnings: string[];
+}
+
 interface RepoLaunchResult {
   success: boolean;
   repoId: string;
@@ -59,6 +92,8 @@ interface RuntimeSession {
   previewUrl: string | null;
   logs: string[];
   lastError: string | null;
+  lastFailureCode: RuntimeIssueCode | null;
+  preflight: RepoPreflightResult | null;
 }
 
 type GithubRepoTarget = {
@@ -73,12 +108,16 @@ type PackageJsonShape = {
   scripts?: Record<string, string>;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
+  workspaces?: string[] | { packages?: string[] };
 };
 
 const CODELOAD_TIMEOUT_MS = 45_000;
 const MAX_ROUTE_CANDIDATES = 20;
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 const START_TIMEOUT_MS = 2 * 60 * 1000;
+const PREVIEW_READY_STATUS_CODES = new Set([200, 204, 301, 302, 307, 308, 401, 403, 404]);
+const MAX_ENV_VAR_CANDIDATES = 20;
+const MAX_PREFLIGHT_SCAN_FILES = 120;
 const runtimeSessions = new Map<string, RuntimeSession>();
 let nextPreviewPort = 3200;
 
@@ -203,6 +242,26 @@ function detectDevCommand(pkg: PackageJsonShape, packageManager: 'npm' | 'pnpm' 
   return null;
 }
 
+function hasLockfile(projectRoot: string) {
+  return (
+    require('fs').existsSync(path.join(projectRoot, 'package-lock.json')) ||
+    require('fs').existsSync(path.join(projectRoot, 'pnpm-lock.yaml')) ||
+    require('fs').existsSync(path.join(projectRoot, 'yarn.lock'))
+  );
+}
+
+function hasWorkspaceConfig(pkg: PackageJsonShape) {
+  if (!pkg.workspaces) {
+    return false;
+  }
+
+  if (Array.isArray(pkg.workspaces)) {
+    return pkg.workspaces.length > 0;
+  }
+
+  return Array.isArray(pkg.workspaces.packages) && pkg.workspaces.packages.length > 0;
+}
+
 async function findProjectRoot(extractRoot: string, subdir: string): Promise<string> {
   const desiredRoot = subdir ? path.join(extractRoot, subdir) : extractRoot;
   if (await fileExists(path.join(desiredRoot, 'package.json'))) {
@@ -276,6 +335,183 @@ async function listRouteCandidates(projectRoot: string, framework: string): Prom
   return Array.from(new Set(candidates));
 }
 
+async function collectPrefightScanFiles(projectRoot: string): Promise<string[]> {
+  const files: string[] = [];
+  const queue = [
+    path.join(projectRoot, 'src'),
+    path.join(projectRoot, 'app'),
+    path.join(projectRoot, 'pages'),
+    path.join(projectRoot, 'components'),
+    projectRoot,
+  ].filter((value, index, all) => all.indexOf(value) === index);
+
+  while (queue.length > 0 && files.length < MAX_PREFLIGHT_SCAN_FILES) {
+    const current = queue.shift()!;
+    if (!(await fileExists(current))) {
+      continue;
+    }
+
+    const stat = await fs.stat(current);
+    if (!stat.isDirectory()) {
+      continue;
+    }
+
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const nextPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (['node_modules', '.git', '.next', 'dist', 'build', 'coverage', '.turbo'].includes(entry.name)) {
+          continue;
+        }
+        queue.push(nextPath);
+        continue;
+      }
+
+      if (!/\.(tsx|ts|jsx|js|mjs|cjs|json|html|css|scss|sass|mdx|md)$/i.test(entry.name)) {
+        continue;
+      }
+
+      files.push(nextPath);
+      if (files.length >= MAX_PREFLIGHT_SCAN_FILES) {
+        break;
+      }
+    }
+  }
+
+  return files;
+}
+
+async function detectEnvVarNames(projectRoot: string, pkg: PackageJsonShape): Promise<string[]> {
+  const names = new Set<string>();
+  const envTemplateFiles = [
+    '.env.example',
+    '.env.sample',
+    '.env.template',
+    '.env.local.example',
+    '.env.development.example',
+  ].map((fileName) => path.join(projectRoot, fileName));
+
+  for (const templatePath of envTemplateFiles) {
+    if (!(await fileExists(templatePath))) {
+      continue;
+    }
+
+    const content = await fs.readFile(templatePath, 'utf8');
+    for (const match of content.matchAll(/^\s*([A-Z][A-Z0-9_]+)\s*=/gm)) {
+      names.add(match[1]);
+    }
+  }
+
+  const scripts = Object.values(pkg.scripts || {}).join('\n');
+  for (const match of scripts.matchAll(/\b([A-Z][A-Z0-9_]{2,})\b/g)) {
+    if (!['NODE', 'PORT', 'HOST', 'PATH', 'CI'].includes(match[1])) {
+      names.add(match[1]);
+    }
+  }
+
+  const scanFiles = await collectPrefightScanFiles(projectRoot);
+  for (const filePath of scanFiles) {
+    const content = await fs.readFile(filePath, 'utf8');
+
+    for (const match of content.matchAll(/process\.env\.([A-Z][A-Z0-9_]+)/g)) {
+      names.add(match[1]);
+    }
+
+    for (const match of content.matchAll(/import\.meta\.env\.([A-Z][A-Z0-9_]+)/g)) {
+      names.add(match[1]);
+    }
+  }
+
+  return Array.from(names)
+    .filter((name) => !['NODE_ENV', 'PORT', 'HOST', 'CI', 'BROWSER'].includes(name))
+    .sort()
+    .slice(0, MAX_ENV_VAR_CANDIDATES);
+}
+
+async function buildPreflightReport(session: RuntimeSession, pkg: PackageJsonShape): Promise<RepoPreflightResult> {
+  const issues: RuntimeIssue[] = [];
+  const warnings = [...session.warnings];
+  const envVarNames = await detectEnvVarNames(session.projectRoot, pkg);
+
+  if (!session.devCommand) {
+    issues.push({
+      code: 'missing_script',
+      severity: 'error',
+      message: 'No runnable dev/start script was detected in package.json.',
+      details: 'Add a dev or start script, or teach Mintay which script should launch the preview.',
+    });
+  }
+
+  if (envVarNames.length > 0) {
+    issues.push({
+      code: 'missing_env',
+      severity: 'warning',
+      message: `This repo appears to depend on ${envVarNames.length} environment variable(s).`,
+      details: envVarNames.join(', '),
+    });
+  }
+
+  if (session.framework === 'unknown') {
+    issues.push({
+      code: 'unknown_framework',
+      severity: 'warning',
+      message: 'Framework detection is unknown, so Mintay may need a fallback launch strategy.',
+    });
+  }
+
+  if (hasWorkspaceConfig(pkg)) {
+    issues.push({
+      code: 'monorepo',
+      severity: 'warning',
+      message: 'This looks like a monorepo/workspace package, and Mintay may need a more specific app root.',
+      details: 'If launch fails, pick the actual frontend package instead of the workspace root.',
+    });
+  }
+
+  if (!hasLockfile(session.projectRoot)) {
+    issues.push({
+      code: 'missing_lockfile',
+      severity: 'info',
+      message: 'No lockfile was found in the detected project root.',
+      details: 'Install may still work, but dependency resolution could be slower or less deterministic.',
+    });
+  }
+
+  const routeCount = session.routeCandidates.length;
+  if (routeCount >= Math.min(MAX_ROUTE_CANDIDATES, 10)) {
+    issues.push({
+      code: 'large_repo',
+      severity: 'info',
+      message: 'Mintay found many candidate route files in this project.',
+      details: 'That is fine, but route selection before extraction will usually produce better screen results.',
+    });
+  }
+
+  let readiness: RepoPreflightResult['readiness'] = 'ready';
+  if (issues.some((issue) => issue.severity === 'error')) {
+    readiness = 'blocked';
+  } else if (issues.some((issue) => issue.code === 'missing_env')) {
+    readiness = 'needs_input';
+  } else if (issues.some((issue) => issue.severity === 'warning')) {
+    readiness = 'limited';
+  }
+
+  return {
+    success: true,
+    repoId: session.repoId,
+    readiness,
+    framework: session.framework,
+    packageManager: session.packageManager,
+    projectRoot: session.projectRoot,
+    installCommand: session.installCommand,
+    devCommand: session.devCommand,
+    routeCandidates: session.routeCandidates,
+    envVarNames,
+    issues,
+    warnings,
+  };
+}
+
 function appendLog(session: RuntimeSession, message: string) {
   session.logs.push(message);
   if (session.logs.length > 200) {
@@ -345,11 +581,13 @@ async function waitForPreview(url: string, timeoutMs: number): Promise<void> {
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      await axios.get(url, {
+      const response = await axios.get(url, {
         timeout: 5000,
         validateStatus: () => true,
       });
-      return;
+      if (PREVIEW_READY_STATUS_CODES.has(response.status)) {
+        return;
+      }
     } catch {
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
@@ -384,6 +622,46 @@ function sanitizeLaunchResult(session: RuntimeSession): RepoLaunchResult {
     routeCandidates: session.routeCandidates,
     warnings: session.warnings,
     logs: session.logs.slice(-40),
+  };
+}
+
+function classifyLaunchFailure(
+  session: RuntimeSession,
+  phase: 'install' | 'start',
+  error: unknown,
+): RuntimeIssue {
+  const message = error instanceof Error ? error.message : 'Runtime launch failed.';
+  const combinedLogs = session.logs.join('\n');
+
+  if (phase === 'install') {
+    return {
+      code: 'install_failed',
+      severity: 'error',
+      message: 'Dependency installation failed before the preview server could start.',
+      details: /ERR_PNPM|pnpm/i.test(combinedLogs)
+        ? 'pnpm install failed. This repo may need a workspace-aware root or a specific package filter.'
+        : /ECONNRESET|ENOTFOUND|network/i.test(combinedLogs)
+          ? 'Package installation failed due to a network or registry issue.'
+          : message,
+    };
+  }
+
+  if (/Timed out waiting for the preview server to start/i.test(message)) {
+    return {
+      code: 'preview_timeout',
+      severity: 'error',
+      message: 'The preview server never became reachable on the expected port.',
+      details: 'This usually means the repo binds to a different host/port, needs extra env vars, or crashed during startup.',
+    };
+  }
+
+  return {
+    code: 'preview_start_failed',
+    severity: 'error',
+    message: 'The preview process exited before Mintay could extract the rendered app.',
+    details: /Missing script|missing script/i.test(combinedLogs)
+      ? 'The detected launch command is not valid for this repo.'
+      : message,
   };
 }
 
@@ -463,7 +741,11 @@ export const repoRuntimeService = {
         previewUrl: null,
         logs: [],
         lastError: null,
+        lastFailureCode: null,
+        preflight: null,
       };
+
+      session.preflight = await buildPreflightReport(session, pkg);
 
       runtimeSessions.set(repoId, session);
       return sanitizePrepareResult(session);
@@ -481,6 +763,7 @@ export const repoRuntimeService = {
     }
 
     if (!session.devCommand) {
+      session.lastFailureCode = 'missing_script';
       throw new Error('No dev/start command detected for this repository.');
     }
 
@@ -490,9 +773,18 @@ export const repoRuntimeService = {
 
     session.status = 'installing';
     appendLog(session, `Installing dependencies with ${session.installCommand}`);
-    await runCommand(session.installCommand, session.projectRoot, session, INSTALL_TIMEOUT_MS);
+    try {
+      await runCommand(session.installCommand, session.projectRoot, session, INSTALL_TIMEOUT_MS);
+    } catch (error) {
+      session.status = 'failed';
+      session.lastFailureCode = 'install_failed';
+      const failure = classifyLaunchFailure(session, 'install', error);
+      session.lastError = failure.details || failure.message;
+      throw new Error(failure.message + (failure.details ? ` ${failure.details}` : ''));
+    }
 
     session.status = 'starting';
+    session.lastFailureCode = null;
     session.port = reservePort();
     session.previewUrl = `http://127.0.0.1:${session.port}`;
     appendLog(session, `Starting preview server with ${session.devCommand} on ${session.previewUrl}`);
@@ -526,10 +818,27 @@ export const repoRuntimeService = {
       return sanitizeLaunchResult(session);
     } catch (error) {
       session.status = 'failed';
-      session.lastError = error instanceof Error ? error.message : 'Could not start preview server.';
+      const failure = classifyLaunchFailure(session, 'start', error);
+      session.lastFailureCode = failure.code;
+      session.lastError = failure.details || failure.message;
       child.kill('SIGTERM');
-      throw new Error(session.lastError);
+      throw new Error(failure.message + (failure.details ? ` ${failure.details}` : ''));
     }
+  },
+
+  async preflight(repoId: string): Promise<RepoPreflightResult> {
+    const session = runtimeSessions.get(repoId);
+    if (!session) {
+      throw new Error('Runtime session not found. Prepare the repository first.');
+    }
+
+    if (session.preflight) {
+      return session.preflight;
+    }
+
+    const pkg = JSON.parse(await fs.readFile(path.join(session.projectRoot, 'package.json'), 'utf8')) as PackageJsonShape;
+    session.preflight = await buildPreflightReport(session, pkg);
+    return session.preflight;
   },
 
   getStatus(repoId: string) {
@@ -550,6 +859,8 @@ export const repoRuntimeService = {
       warnings: session.warnings,
       logs: session.logs.slice(-40),
       error: session.lastError,
+      failureCode: session.lastFailureCode,
+      preflight: session.preflight,
     };
   },
 
