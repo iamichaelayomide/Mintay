@@ -1,5 +1,6 @@
 import type { DragEvent } from 'react';
 import { useMemo, useRef, useState } from 'react';
+import JSZip from 'jszip';
 
 interface DetectedSection {
   id: string;
@@ -26,6 +27,24 @@ const SUPPORTED_EXTENSIONS = [
   '.less',
   '.json',
 ];
+
+const PRIORITY_PATTERNS = [
+  /(^|\/)(app|src)\/page\.(tsx|jsx|ts|js)$/i,
+  /(^|\/)(app|src)\/layout\.(tsx|jsx|ts|js)$/i,
+  /(^|\/)(app|src)\/index\.(tsx|jsx|ts|js)$/i,
+  /(^|\/)(app|src)\/main\.(tsx|jsx|ts|js)$/i,
+  /(^|\/)(app|src)\/app\.(tsx|jsx|ts|js)$/i,
+  /(^|\/)components\/.+\.(tsx|jsx)$/i,
+  /(^|\/).+\.(tsx|jsx)$/i,
+  /(^|\/).+\.(html)$/i,
+  /(^|\/).+\.(css|scss|sass|less)$/i,
+];
+
+interface LoadedCodeFile {
+  name: string;
+  path: string;
+  content: string;
+}
 
 function detectHtmlSections(source: string): DetectedSection[] {
   const pattern = /<(main|section|header|footer|article|nav|aside|form)\b[^>]*>[\s\S]*?<\/\1>/gi;
@@ -157,26 +176,101 @@ function isSupportedFile(fileName: string): boolean {
   return SUPPORTED_EXTENSIONS.some((extension) => lower.endsWith(extension));
 }
 
-async function readFile(file: File): Promise<string> {
-  return file.text();
+function scoreFilePath(filePath: string): number {
+  const normalized = filePath.replace(/\\/g, '/');
+  let score = 0;
+
+  PRIORITY_PATTERNS.forEach((pattern, index) => {
+    if (pattern.test(normalized)) {
+      score += 100 - index * 10;
+    }
+  });
+
+  if (normalized.includes('/node_modules/')) {
+    score -= 200;
+  }
+  if (normalized.includes('/dist/') || normalized.includes('/build/')) {
+    score -= 120;
+  }
+  if (normalized.includes('/public/')) {
+    score -= 25;
+  }
+
+  return score;
 }
 
-async function combineFiles(files: File[]): Promise<string> {
-  const supportedFiles = files.filter((file) => isSupportedFile(file.name)).slice(0, 30);
+function sortLoadedFiles(files: LoadedCodeFile[]): LoadedCodeFile[] {
+  return [...files].sort((left, right) => {
+    const scoreDiff = scoreFilePath(right.path) - scoreFilePath(left.path);
+    if (scoreDiff !== 0) {
+      return scoreDiff;
+    }
+
+    return left.path.localeCompare(right.path);
+  });
+}
+
+async function readRegularFiles(files: File[]): Promise<LoadedCodeFile[]> {
+  const supportedFiles = files.filter((file) => isSupportedFile(file.name));
 
   if (supportedFiles.length === 0) {
     throw new Error('No supported code files found. Use HTML, CSS, JS, JSX, TS, or TSX files.');
   }
 
-  const parts = await Promise.all(
+  return Promise.all(
     supportedFiles.map(async (file) => {
-      const content = await readFile(file);
+      const content = await file.text();
       const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-      return `// File: ${path}\n${content.trim()}`;
+      return {
+        name: file.name,
+        path,
+        content: content.trim(),
+      };
     }),
   );
+}
 
-  return parts.join('\n\n');
+async function readZipFile(file: File): Promise<LoadedCodeFile[]> {
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const entries = Object.values(zip.files);
+  const supportedEntries = entries.filter(
+    (entry) => !entry.dir && isSupportedFile(entry.name),
+  );
+
+  if (supportedEntries.length === 0) {
+    throw new Error('The zip file does not contain supported code files.');
+  }
+
+  return Promise.all(
+    supportedEntries.map(async (entry) => ({
+      name: entry.name.split('/').pop() || entry.name,
+      path: entry.name,
+      content: (await entry.async('text')).trim(),
+    })),
+  );
+}
+
+async function loadFiles(files: File[]): Promise<LoadedCodeFile[]> {
+  if (files.length === 1 && files[0].name.toLowerCase().endsWith('.zip')) {
+    return readZipFile(files[0]);
+  }
+
+  return readRegularFiles(files);
+}
+
+function buildCombinedSource(files: LoadedCodeFile[]): string {
+  return sortLoadedFiles(files)
+    .slice(0, 30)
+    .map((file) => `// File: ${file.path}\n${file.content}`)
+    .join('\n\n');
+}
+
+function buildSummary(files: LoadedCodeFile[], originalFiles: File[]): string {
+  if (originalFiles.length === 1 && originalFiles[0].name.toLowerCase().endsWith('.zip')) {
+    return `${files.length} code files extracted from ${originalFiles[0].name}`;
+  }
+
+  return formatFileSummary(originalFiles);
 }
 
 export default function CodeInput({
@@ -210,9 +304,10 @@ export default function CodeInput({
     }
 
     try {
-      const combined = await combineFiles(files);
-      onChange(combined);
+      const loadedFiles = await loadFiles(files);
+      onChange(buildCombinedSource(loadedFiles));
       onSelectValue(null);
+      setFileSummary(buildSummary(loadedFiles, files));
       setPickerError(null);
     } catch (error) {
       setPickerError(error instanceof Error ? error.message : 'Could not read the selected files.');
