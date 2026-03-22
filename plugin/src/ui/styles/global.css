@@ -169,6 +169,68 @@ button {
   gap: 8px;
 }
 
+.code-toolbar,
+.code-actions,
+.section-picker-header,
+.section-chip-row {
+  display: flex;
+  align-items: center;
+}
+
+.code-toolbar,
+.section-picker-header {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.code-actions,
+.section-chip-row {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.picker-card,
+.section-picker {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 12px;
+}
+
+.picker-title,
+.picker-summary {
+  font-size: 12px;
+  color: var(--text);
+  margin: 0;
+}
+
+.picker-summary {
+  color: var(--muted);
+}
+
+.picker-error {
+  margin: 0;
+  color: var(--error);
+  font-size: 12px;
+}
+
+.section-chip,
+.ghost-chip {
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.section-chip.active,
+.ghost-chip.active {
+  background: rgba(124, 106, 247, 0.16);
+  border-color: rgba(124, 106, 247, 0.4);
+  color: var(--text);
+}
+
 .field-label,
 .status-title {
   font-size: 12px;

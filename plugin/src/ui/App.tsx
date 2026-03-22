@@ -20,6 +20,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<InputTab>('code');
   const [screenMode, setScreenMode] = useState<ScreenMode>('AUTO');
   const [code, setCode] = useState('');
+  const [selectedCode, setSelectedCode] = useState<string | null>(null);
   const [githubUrl, setGithubUrl] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState(DEFAULT_SETTINGS);
@@ -49,7 +50,7 @@ export default function App() {
 
   const handleImport = async () => {
     await startImport({
-      code: activeTab === 'code' ? code : '',
+      code: activeTab === 'code' ? selectedCode || code : '',
       githubUrl: activeTab === 'url' ? githubUrl : '',
       mode: screenMode,
       settings: settingsDraft,
@@ -102,7 +103,15 @@ export default function App() {
 
       <section className="panel">
         {activeTab === 'code' ? (
-          <CodeInput value={code} onChange={setCode} />
+          <CodeInput
+            onChange={(nextValue) => {
+              setCode(nextValue);
+              setSelectedCode(null);
+            }}
+            onSelectValue={setSelectedCode}
+            selectedValue={selectedCode}
+            value={code}
+          />
         ) : (
           <UrlInput
             isLoading={state.status === 'loading'}
