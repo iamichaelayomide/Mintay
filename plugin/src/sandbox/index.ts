@@ -5,7 +5,7 @@ const uiHtml = __MINTAY_UI_HTML__;
 
 declare const __MINTAY_UI_HTML__: string;
 
-const DEFAULT_BACKEND_URL = 'http://localhost:3001';
+const DEFAULT_BACKEND_URL = 'https://mintay.onrender.com';
 
 figma.showUI(uiHtml, {
   width: 420,
