@@ -351,16 +351,21 @@ export default function CodeInput({
   const [fileSummary, setFileSummary] = useState('No files loaded yet.');
   const [pickerError, setPickerError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [loadedFiles, setLoadedFiles] = useState<LoadedCodeFile[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
   const detectedSections = useMemo(() => detectSections(value), [value]);
   const selectedSectionId =
     selectedValue && detectedSections.find((section) => section.content === selectedValue)?.id;
+  const prioritizedFiles = useMemo(() => sortLoadedFiles(loadedFiles).slice(0, 8), [loadedFiles]);
+  const selectedFilePath =
+    selectedValue && prioritizedFiles.find((file) => file.content === selectedValue)?.path;
 
   const handleSourceChange = (nextValue: string) => {
     onChange(nextValue);
     onSelectValue(null);
+    setLoadedFiles([]);
     setPickerError(null);
   };
 
@@ -374,6 +379,7 @@ export default function CodeInput({
 
     try {
       const loadedFiles = await loadFiles(files);
+      setLoadedFiles(loadedFiles);
       onChange(buildCombinedSource(loadedFiles));
       onSelectValue(null);
       setFileSummary(buildSummary(loadedFiles, files));
@@ -456,6 +462,36 @@ export default function CodeInput({
         <p className="picker-summary">{fileSummary}</p>
         {pickerError ? <p className="picker-error">{pickerError}</p> : null}
       </div>
+
+      {prioritizedFiles.length > 0 ? (
+        <div className="section-picker">
+          <div className="section-picker-header">
+            <span className="field-label">Candidate files</span>
+            <button
+              className={selectedFilePath ? 'ghost-chip active' : 'ghost-chip'}
+              onClick={() => onSelectValue(null)}
+              type="button"
+            >
+              Use combined source
+            </button>
+          </div>
+          <div className="section-chip-row">
+            {prioritizedFiles.map((file) => (
+              <button
+                className={selectedFilePath === file.path ? 'section-chip active' : 'section-chip'}
+                key={file.path}
+                onClick={() => onSelectValue(file.content)}
+                type="button"
+              >
+                {file.name}
+              </button>
+            ))}
+          </div>
+          <p className="helper-text">
+            Click a file to import only that file, or keep the combined source for broader context.
+          </p>
+        </div>
+      ) : null}
 
       {detectedSections.length > 0 ? (
         <div className="section-picker">
