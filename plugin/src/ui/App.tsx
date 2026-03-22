@@ -104,6 +104,7 @@ export default function App() {
       <section className="panel">
         {activeTab === 'code' ? (
           <CodeInput
+            backendUrl={settingsDraft.backendUrl}
             onChange={(nextValue) => {
               setCode(nextValue);
               setSelectedCode(null);

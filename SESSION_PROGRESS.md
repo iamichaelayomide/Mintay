@@ -35,6 +35,11 @@ Last updated: 2026-03-22
 - Plugin bundle rebuilt after this fix
 - Next retry should use a freshly re-imported development plugin so Figma loads the new `dist` files
 
+## Current optimization pass
+
+- Section detection is being moved off the plugin UI bundle and onto a backend `/analyze` endpoint
+- Goal: keep candidate file/section chips while shrinking the Figma plugin bundle and avoiding heavy AST parsing in the UI thread
+
 ## What still needs to happen
 
 1. In Figma Desktop, import the plugin from [`plugin/manifest.json`](C:/Users/DELL/mintay/plugin/manifest.json)

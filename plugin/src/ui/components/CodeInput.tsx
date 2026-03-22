@@ -1,6 +1,5 @@
 import type { DragEvent } from 'react';
-import { useMemo, useRef, useState } from 'react';
-import { parse } from '@babel/parser';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import JSZip from 'jszip';
 
 interface DetectedSection {
@@ -10,6 +9,7 @@ interface DetectedSection {
 }
 
 interface CodeInputProps {
+  backendUrl: string;
   value: string;
   selectedValue?: string;
   onChange: (value: string) => void;
@@ -45,187 +45,6 @@ interface LoadedCodeFile {
   name: string;
   path: string;
   content: string;
-}
-
-function detectHtmlSections(source: string): DetectedSection[] {
-  const pattern = /<(main|section|header|footer|article|nav|aside|form)\b[^>]*>[\s\S]*?<\/\1>/gi;
-  const sections: DetectedSection[] = [];
-  let match: RegExpExecArray | null;
-  let index = 0;
-
-  while ((match = pattern.exec(source)) && sections.length < 8) {
-    const tagName = match[1].toLowerCase();
-    const content = match[0].trim();
-    const label = `${tagName[0].toUpperCase()}${tagName.slice(1)} ${index + 1}`;
-
-    if (content.length < 80) {
-      continue;
-    }
-
-    sections.push({
-      id: `${tagName}-${index}`,
-      label,
-      content,
-    });
-    index += 1;
-  }
-
-  return sections;
-}
-
-function extractBalancedBlock(source: string, startIndex: number, openChar: string, closeChar: string): string | null {
-  let depth = 0;
-  let started = false;
-
-  for (let index = startIndex; index < source.length; index += 1) {
-    const char = source[index];
-
-    if (char === openChar) {
-      depth += 1;
-      started = true;
-    } else if (char === closeChar && started) {
-      depth -= 1;
-
-      if (depth === 0) {
-        return source.slice(startIndex, index + 1);
-      }
-    }
-  }
-
-  return null;
-}
-
-function isPascalCase(value: string): boolean {
-  return /^[A-Z][A-Za-z0-9_]*$/.test(value);
-}
-
-function collectJsxLikeReturn(node: unknown): boolean {
-  if (!node || typeof node !== 'object') {
-    return false;
-  }
-
-  const candidate = node as { type?: string; body?: unknown };
-
-  if (
-    candidate.type === 'JSXElement' ||
-    candidate.type === 'JSXFragment' ||
-    candidate.type === 'CallExpression'
-  ) {
-    return true;
-  }
-
-  if (candidate.type === 'BlockStatement' && Array.isArray(candidate.body)) {
-    return candidate.body.some((statement) => {
-      if (!statement || typeof statement !== 'object') {
-        return false;
-      }
-
-      const typedStatement = statement as { type?: string; argument?: unknown };
-      return typedStatement.type === 'ReturnStatement' && collectJsxLikeReturn(typedStatement.argument);
-    });
-  }
-
-  return false;
-}
-
-function detectReactSections(source: string): DetectedSection[] {
-  const sections: DetectedSection[] = [];
-  let ast: any;
-
-  try {
-    ast = parse(source, {
-      sourceType: 'unambiguous',
-      errorRecovery: true,
-      plugins: ['jsx', 'typescript'],
-    });
-  } catch {
-    return sections;
-  }
-
-  const pushComponent = (name: string, node: { start?: number | null; end?: number | null }, bodyNode?: unknown) => {
-    if (!isPascalCase(name) || !collectJsxLikeReturn(bodyNode)) {
-      return;
-    }
-
-    const start = typeof node.start === 'number' ? node.start : null;
-    const end = typeof node.end === 'number' ? node.end : null;
-
-    if (start === null || end === null || end <= start) {
-      return;
-    }
-
-    const content = source.slice(start, end).trim();
-    if (content.length < 80) {
-      return;
-    }
-
-    sections.push({
-      id: `component-${name}-${sections.length}`,
-      label: name,
-      content,
-    });
-  };
-
-  const visit = (node: any) => {
-    if (!node || typeof node !== 'object' || sections.length >= 8) {
-      return;
-    }
-
-    if (node.type === 'FunctionDeclaration' && node.id?.name) {
-      pushComponent(node.id.name, node, node.body);
-    }
-
-    if (node.type === 'VariableDeclarator' && node.id?.type === 'Identifier' && node.init) {
-      const initType = node.init.type;
-      if (initType === 'ArrowFunctionExpression' || initType === 'FunctionExpression') {
-        pushComponent(node.id.name, node, node.init.body);
-      }
-    }
-
-    if (node.type === 'ExportDefaultDeclaration' && node.declaration) {
-      const declaration = node.declaration;
-      if (declaration.type === 'FunctionDeclaration' && declaration.id?.name) {
-        pushComponent(declaration.id.name, node, declaration.body);
-      }
-      if (
-        declaration.type === 'ArrowFunctionExpression' ||
-        declaration.type === 'FunctionExpression'
-      ) {
-        pushComponent('DefaultExport', node, declaration.body);
-      }
-    }
-
-    Object.keys(node).forEach((key) => {
-      const value = node[key];
-      if (Array.isArray(value)) {
-        value.forEach((item) => visit(item));
-        return;
-      }
-
-      if (value && typeof value === 'object' && key !== 'loc') {
-        visit(value);
-      }
-    });
-  };
-
-  visit(ast.program);
-  return sections;
-}
-
-function detectSections(source: string): DetectedSection[] {
-  const reactSections = detectReactSections(source);
-  const htmlSections = detectHtmlSections(source);
-  const merged = [...reactSections, ...htmlSections];
-  const seen = new Set<string>();
-
-  return merged.filter((section) => {
-    if (seen.has(section.content)) {
-      return false;
-    }
-
-    seen.add(section.content);
-    return true;
-  }).slice(0, 10);
 }
 
 function formatFileSummary(files: File[]): string {
@@ -343,6 +162,7 @@ function buildSummary(files: LoadedCodeFile[], originalFiles: File[]): string {
 }
 
 export default function CodeInput({
+  backendUrl,
   value,
   selectedValue,
   onChange,
@@ -352,15 +172,56 @@ export default function CodeInput({
   const [pickerError, setPickerError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [loadedFiles, setLoadedFiles] = useState<LoadedCodeFile[]>([]);
+  const [detectedSections, setDetectedSections] = useState<DetectedSection[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
-  const detectedSections = useMemo(() => detectSections(value), [value]);
   const selectedSectionId =
     selectedValue && detectedSections.find((section) => section.content === selectedValue)?.id;
   const prioritizedFiles = useMemo(() => sortLoadedFiles(loadedFiles).slice(0, 8), [loadedFiles]);
   const selectedFilePath =
     selectedValue && prioritizedFiles.find((file) => file.content === selectedValue)?.path;
+
+  useEffect(() => {
+    const trimmedValue = value.trim();
+
+    if (trimmedValue.length < 80) {
+      setDetectedSections([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`${backendUrl.replace(/\/$/, '')}/analyze`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ code: trimmedValue }),
+          signal: controller.signal,
+        });
+
+        const result = await response.json();
+
+        if (!response.ok || !result.success || !Array.isArray(result.sections)) {
+          setDetectedSections([]);
+          return;
+        }
+
+        setDetectedSections(result.sections as DetectedSection[]);
+      } catch {
+        if (!controller.signal.aborted) {
+          setDetectedSections([]);
+        }
+      }
+    }, 350);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [backendUrl, value]);
 
   const handleSourceChange = (nextValue: string) => {
     onChange(nextValue);
@@ -518,7 +379,7 @@ export default function CodeInput({
             ))}
           </div>
           <p className="helper-text">
-            Click a section to import just that part instead of the whole file. React components and large HTML regions are both detected.
+            Click a section to import just that part instead of the whole file. Section analysis now runs on the backend so the plugin stays lighter.
           </p>
         </div>
       ) : null}

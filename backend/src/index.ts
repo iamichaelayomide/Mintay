@@ -2,6 +2,7 @@ import cors from 'cors';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
+import { analyzeRoute } from './routes/analyze';
 import { healthRoute } from './routes/health';
 import { parseRoute } from './routes/parse';
 
@@ -24,6 +25,8 @@ const limiter = rateLimit({
 });
 
 app.use('/parse', limiter);
+app.use('/analyze', limiter);
+app.use('/analyze', analyzeRoute);
 app.use('/parse', parseRoute);
 app.use('/health', healthRoute);
 
