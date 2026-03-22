@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { spawn, type ChildProcess } from 'child_process';
 import { createHash, randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import os from 'os';
@@ -20,6 +21,30 @@ const JSZip = require('jszip') as {
 interface RepoPrepareResult {
   success: boolean;
   repoId: string;
+  projectRoot: string;
+  packageManager: 'npm' | 'pnpm' | 'yarn';
+  framework: string;
+  installCommand: string;
+  devCommand: string | null;
+  routeCandidates: string[];
+  warnings: string[];
+}
+
+interface RepoLaunchResult {
+  success: boolean;
+  repoId: string;
+  status: 'running' | 'failed';
+  previewUrl: string | null;
+  port: number | null;
+  framework: string;
+  packageManager: 'npm' | 'pnpm' | 'yarn';
+  routeCandidates: string[];
+  warnings: string[];
+  logs: string[];
+}
+
+interface RuntimeSession {
+  repoId: string;
   workspacePath: string;
   projectRoot: string;
   packageManager: 'npm' | 'pnpm' | 'yarn';
@@ -28,6 +53,12 @@ interface RepoPrepareResult {
   devCommand: string | null;
   routeCandidates: string[];
   warnings: string[];
+  status: 'prepared' | 'installing' | 'starting' | 'running' | 'failed' | 'stopped';
+  process: ChildProcess | null;
+  port: number | null;
+  previewUrl: string | null;
+  logs: string[];
+  lastError: string | null;
 }
 
 type GithubRepoTarget = {
@@ -46,6 +77,10 @@ type PackageJsonShape = {
 
 const CODELOAD_TIMEOUT_MS = 45_000;
 const MAX_ROUTE_CANDIDATES = 20;
+const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+const START_TIMEOUT_MS = 2 * 60 * 1000;
+const runtimeSessions = new Map<string, RuntimeSession>();
+let nextPreviewPort = 3200;
 
 function parseGithubRepoTarget(url: string): GithubRepoTarget {
   let parsed: URL;
@@ -241,6 +276,117 @@ async function listRouteCandidates(projectRoot: string, framework: string): Prom
   return Array.from(new Set(candidates));
 }
 
+function appendLog(session: RuntimeSession, message: string) {
+  session.logs.push(message);
+  if (session.logs.length > 200) {
+    session.logs.splice(0, session.logs.length - 200);
+  }
+}
+
+function reservePort() {
+  const port = nextPreviewPort;
+  nextPreviewPort += 1;
+  if (nextPreviewPort > 3999) {
+    nextPreviewPort = 3200;
+  }
+  return port;
+}
+
+function getShellInvocation(command: string) {
+  if (process.platform === 'win32') {
+    return {
+      shell: 'cmd.exe',
+      args: ['/c', command],
+    };
+  }
+
+  return {
+    shell: 'sh',
+    args: ['-lc', command],
+  };
+}
+
+function runCommand(command: string, cwd: string, session: RuntimeSession, timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const invocation = getShellInvocation(command);
+    const child = spawn(invocation.shell, invocation.args, {
+      cwd,
+      env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error(`Command timed out: ${command}`));
+    }, timeoutMs);
+
+    child.stdout?.on('data', (chunk) => appendLog(session, String(chunk).trim()));
+    child.stderr?.on('data', (chunk) => appendLog(session, String(chunk).trim()));
+
+    child.on('exit', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(`Command failed (${code ?? 'unknown'}): ${command}`));
+    });
+
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
+async function waitForPreview(url: string, timeoutMs: number): Promise<void> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      await axios.get(url, {
+        timeout: 5000,
+        validateStatus: () => true,
+      });
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+
+  throw new Error('Timed out waiting for the preview server to start.');
+}
+
+function sanitizePrepareResult(session: RuntimeSession): RepoPrepareResult {
+  return {
+    success: true,
+    repoId: session.repoId,
+    projectRoot: session.projectRoot,
+    packageManager: session.packageManager,
+    framework: session.framework,
+    installCommand: session.installCommand,
+    devCommand: session.devCommand,
+    routeCandidates: session.routeCandidates,
+    warnings: session.warnings,
+  };
+}
+
+function sanitizeLaunchResult(session: RuntimeSession): RepoLaunchResult {
+  return {
+    success: session.status === 'running',
+    repoId: session.repoId,
+    status: session.status === 'running' ? 'running' : 'failed',
+    previewUrl: session.previewUrl,
+    port: session.port,
+    framework: session.framework,
+    packageManager: session.packageManager,
+    routeCandidates: session.routeCandidates,
+    warnings: session.warnings,
+    logs: session.logs.slice(-40),
+  };
+}
+
 export const repoRuntimeService = {
   async prepareFromGithubUrl(url: string): Promise<RepoPrepareResult> {
     const target = parseGithubRepoTarget(url);
@@ -301,8 +447,7 @@ export const repoRuntimeService = {
         warnings.push('Framework detection is unknown. Runner support is currently strongest for Next.js, Vite, and CRA-style apps.');
       }
 
-      return {
-        success: true,
+      const session: RuntimeSession = {
         repoId,
         workspacePath,
         projectRoot,
@@ -312,11 +457,118 @@ export const repoRuntimeService = {
         devCommand,
         routeCandidates,
         warnings,
+        status: 'prepared',
+        process: null,
+        port: null,
+        previewUrl: null,
+        logs: [],
+        lastError: null,
       };
+
+      runtimeSessions.set(repoId, session);
+      return sanitizePrepareResult(session);
     } catch (error) {
       await removeDir(workspacePath);
       const message = error instanceof Error ? error.message : 'Could not prepare repository runtime workspace.';
       throw new Error(message);
     }
+  },
+
+  async launch(repoId: string): Promise<RepoLaunchResult> {
+    const session = runtimeSessions.get(repoId);
+    if (!session) {
+      throw new Error('Runtime session not found. Prepare the repository first.');
+    }
+
+    if (!session.devCommand) {
+      throw new Error('No dev/start command detected for this repository.');
+    }
+
+    if (session.process && session.status === 'running') {
+      return sanitizeLaunchResult(session);
+    }
+
+    session.status = 'installing';
+    appendLog(session, `Installing dependencies with ${session.installCommand}`);
+    await runCommand(session.installCommand, session.projectRoot, session, INSTALL_TIMEOUT_MS);
+
+    session.status = 'starting';
+    session.port = reservePort();
+    session.previewUrl = `http://127.0.0.1:${session.port}`;
+    appendLog(session, `Starting preview server with ${session.devCommand} on ${session.previewUrl}`);
+
+    const invocation = getShellInvocation(session.devCommand);
+    const child = spawn(invocation.shell, invocation.args, {
+      cwd: session.projectRoot,
+      env: {
+        ...process.env,
+        PORT: String(session.port),
+        HOST: '127.0.0.1',
+        BROWSER: 'none',
+        CI: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    session.process = child;
+    child.stdout?.on('data', (chunk) => appendLog(session, String(chunk).trim()));
+    child.stderr?.on('data', (chunk) => appendLog(session, String(chunk).trim()));
+    child.on('exit', (code) => {
+      if (session.status !== 'stopped') {
+        session.status = 'failed';
+        session.lastError = `Preview process exited with code ${code ?? 'unknown'}`;
+      }
+    });
+
+    try {
+      await waitForPreview(session.previewUrl, START_TIMEOUT_MS);
+      session.status = 'running';
+      return sanitizeLaunchResult(session);
+    } catch (error) {
+      session.status = 'failed';
+      session.lastError = error instanceof Error ? error.message : 'Could not start preview server.';
+      child.kill('SIGTERM');
+      throw new Error(session.lastError);
+    }
+  },
+
+  getStatus(repoId: string) {
+    const session = runtimeSessions.get(repoId);
+    if (!session) {
+      throw new Error('Runtime session not found.');
+    }
+
+    return {
+      success: session.status === 'running' || session.status === 'prepared' || session.status === 'starting' || session.status === 'installing',
+      repoId: session.repoId,
+      status: session.status,
+      previewUrl: session.previewUrl,
+      port: session.port,
+      framework: session.framework,
+      packageManager: session.packageManager,
+      routeCandidates: session.routeCandidates,
+      warnings: session.warnings,
+      logs: session.logs.slice(-40),
+      error: session.lastError,
+    };
+  },
+
+  async stop(repoId: string) {
+    const session = runtimeSessions.get(repoId);
+    if (!session) {
+      throw new Error('Runtime session not found.');
+    }
+
+    session.status = 'stopped';
+    session.process?.kill('SIGTERM');
+    session.process = null;
+    await removeDir(session.workspacePath);
+    runtimeSessions.delete(repoId);
+
+    return {
+      success: true,
+      repoId,
+      stopped: true,
+    };
   },
 };
