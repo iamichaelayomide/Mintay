@@ -8,25 +8,17 @@ const distDir = path.resolve(rootDir, 'dist');
 const uiOutDir = path.resolve(distDir, 'ui');
 
 function inlineBuiltUi() {
-  return {
-    name: 'inline-built-ui',
-    transform(code: string, id: string) {
-      if (!id.endsWith(path.normalize('src/sandbox/index.ts'))) {
-        return null;
-      }
-
-      const uiHtmlPath = path.resolve(uiOutDir, 'index.html');
-      const uiHtml = fs.existsSync(uiHtmlPath) ? fs.readFileSync(uiHtmlPath, 'utf8') : '<div id="root"></div>';
-      return code.replace('__MINTAY_UI_HTML__', JSON.stringify(uiHtml));
-    },
-  };
+  const uiHtmlPath = path.resolve(uiOutDir, 'index.html');
+  return fs.existsSync(uiHtmlPath) ? fs.readFileSync(uiHtmlPath, 'utf8') : '<div id="root"></div>';
 }
 
 export default defineConfig(({ mode }) => {
   if (mode === 'sandbox') {
     return {
       root: rootDir,
-      plugins: [inlineBuiltUi()],
+      define: {
+        __MINTAY_UI_HTML__: JSON.stringify(inlineBuiltUi()),
+      },
       build: {
         target: 'es2017',
         outDir: path.resolve(distDir, 'sandbox'),

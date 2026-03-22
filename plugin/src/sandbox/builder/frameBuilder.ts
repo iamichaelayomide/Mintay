@@ -9,9 +9,9 @@ export async function buildFrameNode(node: MintayNode): Promise<FrameNode> {
   frame.x = node.x;
   frame.y = node.y;
   frame.resize(Math.max(node.width, 1), Math.max(node.height, 1));
-  frame.fills = node.fills?.length ? buildSolidOrGradientFills(node.fills) : [];
+  frame.fills = node.fills && node.fills.length ? buildSolidOrGradientFills(node.fills) : [];
 
-  if (node.strokes?.length) {
+  if (node.strokes && node.strokes.length) {
     frame.strokes = buildStrokePaints(node.strokes);
     frame.strokeWeight = node.strokes[0].width;
     frame.strokeAlign = node.strokes[0].position === 'OUTSIDE' ? 'OUTSIDE' : node.strokes[0].position === 'CENTER' ? 'CENTER' : 'INSIDE';
@@ -25,7 +25,7 @@ export async function buildFrameNode(node: MintayNode): Promise<FrameNode> {
     frame.strokes = [];
   }
 
-  if (node.shadows?.length) {
+  if (node.shadows && node.shadows.length) {
     frame.effects = buildEffects(node.shadows);
   }
 

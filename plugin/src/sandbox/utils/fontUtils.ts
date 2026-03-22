@@ -59,7 +59,7 @@ function collectFonts(nodes: MintayNode[], fontMap: Map<string, FontName>) {
       fontMap.set(`${fontName.family}-${fontName.style}`, fontName);
     }
 
-    if (node.children?.length) {
+    if (node.children && node.children.length) {
       collectFonts(node.children, fontMap);
     }
   }

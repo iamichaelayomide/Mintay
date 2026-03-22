@@ -36,18 +36,25 @@ export function buildSolidOrGradientFills(fills: MintayFill[]): Paint[] {
       return {
         type: fill.gradient.type === 'RADIAL' ? 'GRADIENT_RADIAL' : 'GRADIENT_LINEAR',
         gradientStops: fill.gradient.stops.map((stop) => ({
-          color: { ...mintayColorToFigma(stop.color), a: stop.color.a },
+          color: Object.assign({}, mintayColorToFigma(stop.color), { a: stop.color.a }),
           position: stop.position,
         })),
         gradientTransform: gradientTransform(fill.gradient.angle),
-        opacity: fill.opacity ?? 1,
+        opacity: fill.opacity !== undefined ? fill.opacity : 1,
       } as GradientPaint;
     }
+
+    const fillOpacity =
+      fill.opacity !== undefined
+        ? fill.opacity
+        : fill.color && fill.color.a !== undefined
+          ? fill.color.a
+          : 1;
 
     return {
       type: 'SOLID',
       color: mintayColorToFigma(fill.color || { r: 0.9, g: 0.9, b: 0.9, a: 1 }),
-      opacity: fill.opacity ?? fill.color?.a ?? 1,
+      opacity: fillOpacity,
     } as SolidPaint;
   });
 }
@@ -65,7 +72,7 @@ export function buildEffects(shadows: MintayShadow[]): Effect[] {
     type: shadow.inner ? 'INNER_SHADOW' : 'DROP_SHADOW',
     visible: true,
     blendMode: 'NORMAL',
-    color: { ...mintayColorToFigma(shadow.color), a: shadow.color.a },
+    color: Object.assign({}, mintayColorToFigma(shadow.color), { a: shadow.color.a }),
     offset: { x: shadow.offsetX, y: shadow.offsetY },
     radius: shadow.blur,
     spread: shadow.spread,

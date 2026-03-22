@@ -84,7 +84,7 @@ async function handleBuildScreens(parseResult: MintayParseResult) {
   }
 
   const builtFrames: FrameNode[] = [];
-  const buildWarnings = [...warnings];
+  const buildWarnings = warnings.slice();
   let xOffset = 0;
   const gap = 120;
 
@@ -96,7 +96,7 @@ async function handleBuildScreens(parseResult: MintayParseResult) {
       figma.currentPage.appendChild(frame);
       builtFrames.push(frame);
       xOffset += screen.width + gap;
-      buildWarnings.push(...screenWarnings);
+      Array.prototype.push.apply(buildWarnings, screenWarnings);
     } catch (buildError) {
       const message = buildError instanceof Error ? buildError.message : 'Unknown build error';
       buildWarnings.push(`Failed to build screen "${screen.name}": ${message}`);

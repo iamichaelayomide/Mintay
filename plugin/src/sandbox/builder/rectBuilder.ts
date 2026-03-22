@@ -7,15 +7,15 @@ export async function buildRectangleNode(node: MintayNode): Promise<RectangleNod
   rect.x = node.x;
   rect.y = node.y;
   rect.resize(Math.max(node.width, 1), Math.max(node.height, 1));
-  rect.fills = node.fills?.length ? buildSolidOrGradientFills(node.fills) : [];
-  rect.strokes = node.strokes?.length ? buildStrokePaints(node.strokes) : [];
+  rect.fills = node.fills && node.fills.length ? buildSolidOrGradientFills(node.fills) : [];
+  rect.strokes = node.strokes && node.strokes.length ? buildStrokePaints(node.strokes) : [];
 
-  if (node.strokes?.length) {
+  if (node.strokes && node.strokes.length) {
     rect.strokeWeight = node.strokes[0].width;
     rect.strokeAlign = node.strokes[0].position === 'OUTSIDE' ? 'OUTSIDE' : node.strokes[0].position === 'CENTER' ? 'CENTER' : 'INSIDE';
   }
 
-  if (node.shadows?.length) {
+  if (node.shadows && node.shadows.length) {
     rect.effects = buildEffects(node.shadows);
   }
 
@@ -34,15 +34,15 @@ export async function buildEllipseNode(node: MintayNode): Promise<EllipseNode> {
   ellipse.x = node.x;
   ellipse.y = node.y;
   ellipse.resize(Math.max(node.width, 1), Math.max(node.height, 1));
-  ellipse.fills = node.fills?.length ? buildSolidOrGradientFills(node.fills) : [];
-  ellipse.strokes = node.strokes?.length ? buildStrokePaints(node.strokes) : [];
+  ellipse.fills = node.fills && node.fills.length ? buildSolidOrGradientFills(node.fills) : [];
+  ellipse.strokes = node.strokes && node.strokes.length ? buildStrokePaints(node.strokes) : [];
 
-  if (node.strokes?.length) {
+  if (node.strokes && node.strokes.length) {
     ellipse.strokeWeight = node.strokes[0].width;
     ellipse.strokeAlign = node.strokes[0].position === 'OUTSIDE' ? 'OUTSIDE' : node.strokes[0].position === 'CENTER' ? 'CENTER' : 'INSIDE';
   }
 
-  if (node.shadows?.length) {
+  if (node.shadows && node.shadows.length) {
     ellipse.effects = buildEffects(node.shadows);
   }
 
