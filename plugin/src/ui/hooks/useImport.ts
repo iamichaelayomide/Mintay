@@ -135,6 +135,24 @@ function summarizeScreens(screens: MintayScreen[]): ScreenSummary[] {
   }));
 }
 
+function isGithubRepoRuntimeCandidate(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== 'github.com' && parsed.hostname !== 'www.github.com') {
+      return false;
+    }
+
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    if (segments.length < 2) {
+      return false;
+    }
+
+    return segments[2] !== 'blob' && segments[2] !== 'raw';
+  } catch {
+    return false;
+  }
+}
+
 export function useImport() {
   const [state, setState] = useState<ImportState>(initialState);
   const [pendingResult, setPendingResult] = useState<MintayParseResult | null>(null);
@@ -250,30 +268,122 @@ export function useImport() {
       const timeout = window.setTimeout(() => controller.abort(), DEFAULT_PARSE_TIMEOUT_MS);
 
       try {
-        setState((current) => ({
-          ...current,
-          progress: 42,
-          statusText: 'Parsing your repo into candidate screens. Larger imports can take a bit longer...',
-        }));
+        let result: MintayParseResult;
 
-        const response = await fetch(`${backendUrl.replace(/\/$/, '')}/parse`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            code: trimmedCode || undefined,
-            githubUrl: trimmedUrl || undefined,
-            mode,
-            apiKey: settings.apiKey || undefined,
-          }),
-          signal: controller.signal,
-        });
+        if (trimmedUrl && isGithubRepoRuntimeCandidate(trimmedUrl)) {
+          setState((current) => ({
+            ...current,
+            progress: 24,
+            statusText: 'Preparing the repository runtime workspace...',
+          }));
 
-        const result = (await response.json()) as MintayParseResult;
+          const prepareResponse = await fetch(`${backendUrl.replace(/\/$/, '')}/repo-runtime/prepare`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              githubUrl: trimmedUrl,
+            }),
+            signal: controller.signal,
+          });
 
-        if (!response.ok) {
-          throw new Error(result.error || 'Mintay could not parse the provided input.');
+          const prepared = (await prepareResponse.json()) as {
+            success?: boolean;
+            repoId?: string;
+            error?: string;
+          };
+
+          if (!prepareResponse.ok || !prepared.success || !prepared.repoId) {
+            throw new Error(prepared.error || 'Mintay could not prepare the repository runtime.');
+          }
+
+          setState((current) => ({
+            ...current,
+            progress: 48,
+            statusText: 'Installing dependencies and starting a live preview...',
+          }));
+
+          const launchResponse = await fetch(`${backendUrl.replace(/\/$/, '')}/repo-runtime/launch`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              repoId: prepared.repoId,
+            }),
+            signal: controller.signal,
+          });
+
+          const launched = (await launchResponse.json()) as {
+            success?: boolean;
+            repoId?: string;
+            error?: string;
+          };
+
+          if (!launchResponse.ok || !launched.success || !launched.repoId) {
+            throw new Error(launched.error || 'Mintay could not launch the repository preview.');
+          }
+
+          setState((current) => ({
+            ...current,
+            progress: 72,
+            statusText: 'Extracting the real rendered layout from the running app...',
+          }));
+
+          const extractResponse = await fetch(`${backendUrl.replace(/\/$/, '')}/repo-runtime/extract`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              repoId: launched.repoId,
+              mode,
+            }),
+            signal: controller.signal,
+          });
+
+          result = (await extractResponse.json()) as MintayParseResult;
+
+          void fetch(`${backendUrl.replace(/\/$/, '')}/repo-runtime/stop`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              repoId: launched.repoId,
+            }),
+          }).catch(() => undefined);
+
+          if (!extractResponse.ok) {
+            throw new Error(result.error || 'Mintay could not extract the rendered repository layout.');
+          }
+        } else {
+          setState((current) => ({
+            ...current,
+            progress: 42,
+            statusText: 'Parsing your repo into candidate screens. Larger imports can take a bit longer...',
+          }));
+
+          const response = await fetch(`${backendUrl.replace(/\/$/, '')}/parse`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              code: trimmedCode || undefined,
+              githubUrl: trimmedUrl || undefined,
+              mode,
+              apiKey: settings.apiKey || undefined,
+            }),
+            signal: controller.signal,
+          });
+
+          result = (await response.json()) as MintayParseResult;
+
+          if (!response.ok) {
+            throw new Error(result.error || 'Mintay could not parse the provided input.');
+          }
         }
 
         if (!result.success || !Array.isArray(result.screens) || result.screens.length === 0) {
