@@ -213,16 +213,6 @@ export function useImport() {
         ? mergeSettings(writeLocalSettings(currentSettings), await loadSettings())
         : await loadSettings();
 
-      if (!settings.apiKey) {
-        setState({
-          ...initialState,
-          status: 'error',
-          error: 'Add your Gemini API key in settings to continue.',
-          statusText: 'Missing API key.',
-        });
-        return;
-      }
-
       const backendUrl = settings.backendUrl?.trim() || DEFAULT_BACKEND_URL;
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 30000);
@@ -243,7 +233,7 @@ export function useImport() {
             code: trimmedCode || undefined,
             githubUrl: trimmedUrl || undefined,
             mode,
-            apiKey: settings.apiKey,
+            apiKey: settings.apiKey || undefined,
           }),
           signal: controller.signal,
         });
