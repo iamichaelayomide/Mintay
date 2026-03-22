@@ -3,7 +3,7 @@ import { MintayParseResult } from '../../../shared/types/mintaySchema';
 import { SYSTEM_PROMPT, buildUserPrompt } from '../prompts/layoutPrompt';
 
 const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-const GEMINI_TIMEOUT_MS = 600000;
+const GEMINI_TIMEOUT_MS = 1800000;
 
 function resolveApiKey(overrideApiKey?: string): string {
   const resolvedApiKey = overrideApiKey || process.env.GEMINI_API_KEY;

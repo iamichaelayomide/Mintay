@@ -31,7 +31,7 @@ interface ImportState {
 
 const DEFAULT_BACKEND_URL = 'https://mintay.onrender.com';
 const SETTINGS_STORAGE_KEY = 'mintay_plugin_settings';
-const DEFAULT_PARSE_TIMEOUT_MS = 600000;
+const DEFAULT_PARSE_TIMEOUT_MS = 1800000;
 
 const defaultSettings: PluginSettings = {
   apiKey: '',
