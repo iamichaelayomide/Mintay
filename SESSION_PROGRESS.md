@@ -56,6 +56,11 @@ Last updated: 2026-03-22
   - sandbox stores these values in Figma client storage
   - `/repo-runtime/launch` now accepts `envOverrides`
   - backend injects those env vars into the runtime preview process
+- Runtime launch strategies improved:
+  - backend no longer relies on one generic `npm run dev`
+  - framework-aware strategies now try explicit host/port flags for Next.js, Vite-compatible apps, and Angular
+  - a `build + preview` fallback is attempted when the repo exposes both scripts
+  - launch failures now log each attempted strategy before returning the final timeout/startup error
 
 ## What still needs to happen
 

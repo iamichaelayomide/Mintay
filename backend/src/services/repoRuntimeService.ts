@@ -112,6 +112,13 @@ type PackageJsonShape = {
   workspaces?: string[] | { packages?: string[] };
 };
 
+type LaunchStrategy = {
+  label: string;
+  command: string;
+  setupCommand?: string;
+  env?: Record<string, string>;
+};
+
 const CODELOAD_TIMEOUT_MS = 45_000;
 const MAX_ROUTE_CANDIDATES = 20;
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -241,6 +248,110 @@ function detectDevCommand(pkg: PackageJsonShape, packageManager: 'npm' | 'pnpm' 
     return packageManager === 'yarn' ? 'yarn start' : `${packageManager} run start`;
   }
   return null;
+}
+
+function getScriptRunner(
+  packageManager: 'npm' | 'pnpm' | 'yarn',
+  scriptName: string,
+  args: string[] = [],
+): string {
+  if (packageManager === 'yarn') {
+    return ['yarn', scriptName, ...args].join(' ');
+  }
+
+  if (args.length > 0) {
+    return [packageManager, 'run', scriptName, '--', ...args].join(' ');
+  }
+
+  return [packageManager, 'run', scriptName].join(' ');
+}
+
+function detectPreferredScriptName(pkg: PackageJsonShape): 'dev' | 'start' | null {
+  const scripts = pkg.scripts || {};
+
+  if (scripts.dev) {
+    return 'dev';
+  }
+
+  if (scripts.start) {
+    return 'start';
+  }
+
+  return null;
+}
+
+function resolveLaunchStrategies(
+  pkg: PackageJsonShape,
+  packageManager: 'npm' | 'pnpm' | 'yarn',
+  framework: string,
+  port: number,
+): LaunchStrategy[] {
+  const strategies: LaunchStrategy[] = [];
+  const scripts = pkg.scripts || {};
+  const preferredScript = detectPreferredScriptName(pkg);
+
+  if (preferredScript) {
+    if (framework === 'next') {
+      strategies.push({
+        label: 'Next.js dev with explicit host/port flags',
+        command: getScriptRunner(packageManager, preferredScript, [
+          '--hostname',
+          '0.0.0.0',
+          '--port',
+          String(port),
+        ]),
+        env: {
+          HOSTNAME: '0.0.0.0',
+        },
+      });
+    } else if (framework === 'vite' || framework === 'vue') {
+      strategies.push({
+        label: 'Vite-compatible dev with explicit host/port flags',
+        command: getScriptRunner(packageManager, preferredScript, [
+          '--host',
+          '0.0.0.0',
+          '--port',
+          String(port),
+        ]),
+      });
+    } else if (framework === 'angular') {
+      strategies.push({
+        label: 'Angular dev with explicit host/port flags',
+        command: getScriptRunner(packageManager, preferredScript, [
+          '--host',
+          '0.0.0.0',
+          '--port',
+          String(port),
+        ]),
+      });
+    }
+
+    strategies.push({
+      label: 'Script with env-based host/port injection',
+      command: getScriptRunner(packageManager, preferredScript),
+      env: {
+        HOST: '0.0.0.0',
+        HOSTNAME: '0.0.0.0',
+      },
+    });
+  }
+
+  if (scripts.build && scripts.preview) {
+    strategies.push({
+      label: 'Build and preview fallback',
+      setupCommand: getScriptRunner(packageManager, 'build'),
+      command: getScriptRunner(packageManager, 'preview', ['--host', '0.0.0.0', '--port', String(port)]),
+    });
+  }
+
+  return strategies.filter(
+    (strategy, index, all) =>
+      all.findIndex(
+        (other) =>
+          other.command === strategy.command &&
+          (other.setupCommand || '') === (strategy.setupCommand || ''),
+      ) === index,
+  );
 }
 
 function hasLockfile(projectRoot: string) {
@@ -591,6 +702,14 @@ function runCommand(command: string, cwd: string, session: RuntimeSession, timeo
   });
 }
 
+function killProcessTree(child: ChildProcess | null) {
+  if (!child || child.killed) {
+    return;
+  }
+
+  child.kill('SIGTERM');
+}
+
 async function waitForPreview(url: string, timeoutMs: number): Promise<void> {
   const startedAt = Date.now();
 
@@ -680,6 +799,60 @@ function classifyLaunchFailure(
   };
 }
 
+async function attemptLaunchStrategy(
+  session: RuntimeSession,
+  strategy: LaunchStrategy,
+): Promise<RepoLaunchResult> {
+  if (!session.port || !session.previewUrl) {
+    throw new Error('Preview port was not reserved before launch.');
+  }
+
+  appendLog(session, `Trying launch strategy: ${strategy.label}`);
+
+  if (strategy.setupCommand) {
+    appendLog(session, `Running setup command: ${strategy.setupCommand}`);
+    await runCommand(strategy.setupCommand, session.projectRoot, session, INSTALL_TIMEOUT_MS);
+  }
+
+  appendLog(session, `Starting preview server with ${strategy.command} on ${session.previewUrl}`);
+
+  const invocation = getShellInvocation(strategy.command);
+  const child = spawn(invocation.shell, invocation.args, {
+    cwd: session.projectRoot,
+    env: {
+      ...process.env,
+      ...session.envOverrides,
+      ...(strategy.env || {}),
+      PORT: String(session.port),
+      HOST: '0.0.0.0',
+      HOSTNAME: '0.0.0.0',
+      BROWSER: 'none',
+      CI: '1',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  session.process = child;
+  child.stdout?.on('data', (chunk) => appendLog(session, String(chunk).trim()));
+  child.stderr?.on('data', (chunk) => appendLog(session, String(chunk).trim()));
+  child.on('exit', (code) => {
+    if (session.status !== 'stopped' && session.status !== 'running') {
+      session.status = 'failed';
+      session.lastError = `Preview process exited with code ${code ?? 'unknown'}`;
+    }
+  });
+
+  try {
+    await waitForPreview(session.previewUrl, START_TIMEOUT_MS);
+    session.status = 'running';
+    return sanitizeLaunchResult(session);
+  } catch (error) {
+    killProcessTree(child);
+    session.process = null;
+    throw error;
+  }
+}
+
 export const repoRuntimeService = {
   async prepareFromGithubUrl(url: string): Promise<RepoPrepareResult> {
     const target = parseGithubRepoTarget(url);
@@ -728,6 +901,7 @@ export const repoRuntimeService = {
       const projectRoot = await findProjectRoot(extractRoot, target.subdir);
       const pkg = JSON.parse(await fs.readFile(path.join(projectRoot, 'package.json'), 'utf8')) as PackageJsonShape;
       const packageManager = detectPackageManager(projectRoot);
+      const scripts = pkg.scripts || {};
       const framework = detectFramework(pkg);
       const devCommand = detectDevCommand(pkg, packageManager);
       const routeCandidates = await listRouteCandidates(projectRoot, framework);
@@ -738,6 +912,9 @@ export const repoRuntimeService = {
       }
       if (framework === 'unknown') {
         warnings.push('Framework detection is unknown. Runner support is currently strongest for Next.js, Vite, and CRA-style apps.');
+      }
+      if (scripts.build && scripts.preview) {
+        warnings.push('Build and preview fallback is available if the default dev launch does not bind cleanly.');
       }
 
       const session: RuntimeSession = {
@@ -805,44 +982,28 @@ export const repoRuntimeService = {
     session.lastFailureCode = null;
     session.port = reservePort();
     session.previewUrl = `http://127.0.0.1:${session.port}`;
-    appendLog(session, `Starting preview server with ${session.devCommand} on ${session.previewUrl}`);
+    const pkg = JSON.parse(await fs.readFile(path.join(session.projectRoot, 'package.json'), 'utf8')) as PackageJsonShape;
+    const strategies = resolveLaunchStrategies(pkg, session.packageManager, session.framework, session.port);
 
-    const invocation = getShellInvocation(session.devCommand);
-    const child = spawn(invocation.shell, invocation.args, {
-      cwd: session.projectRoot,
-      env: {
-        ...process.env,
-        ...session.envOverrides,
-        PORT: String(session.port),
-        HOST: '127.0.0.1',
-        BROWSER: 'none',
-        CI: '1',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    session.process = child;
-    child.stdout?.on('data', (chunk) => appendLog(session, String(chunk).trim()));
-    child.stderr?.on('data', (chunk) => appendLog(session, String(chunk).trim()));
-    child.on('exit', (code) => {
-      if (session.status !== 'stopped') {
-        session.status = 'failed';
-        session.lastError = `Preview process exited with code ${code ?? 'unknown'}`;
-      }
-    });
-
-    try {
-      await waitForPreview(session.previewUrl, START_TIMEOUT_MS);
-      session.status = 'running';
-      return sanitizeLaunchResult(session);
-    } catch (error) {
-      session.status = 'failed';
-      const failure = classifyLaunchFailure(session, 'start', error);
-      session.lastFailureCode = failure.code;
-      session.lastError = failure.details || failure.message;
-      child.kill('SIGTERM');
-      throw new Error(failure.message + (failure.details ? ` ${failure.details}` : ''));
+    if (strategies.length === 0) {
+      session.lastFailureCode = 'missing_script';
+      throw new Error('No supported launch strategy could be constructed for this repository.');
     }
+
+    for (const strategy of strategies) {
+      try {
+        return await attemptLaunchStrategy(session, strategy);
+      } catch (error) {
+        appendLog(session, `Launch strategy failed: ${strategy.label}`);
+        appendLog(session, error instanceof Error ? error.message : 'Unknown launch failure');
+      }
+    }
+
+    session.status = 'failed';
+    const failure = classifyLaunchFailure(session, 'start', new Error('Timed out waiting for the preview server to start.'));
+    session.lastFailureCode = failure.code;
+    session.lastError = failure.details || failure.message;
+    throw new Error(failure.message + (failure.details ? ` ${failure.details}` : ''));
   },
 
   async preflight(repoId: string): Promise<RepoPreflightResult> {
