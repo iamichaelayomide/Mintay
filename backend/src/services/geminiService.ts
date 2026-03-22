@@ -2,6 +2,10 @@ import axios from 'axios';
 import { MintayParseResult } from '../../../shared/types/mintaySchema';
 import { SYSTEM_PROMPT, buildUserPrompt } from '../prompts/layoutPrompt';
 
+const JSON5 = require('json5') as {
+  parse(value: string): unknown;
+};
+
 const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 const GEMINI_TIMEOUT_MS = 1800000;
 
@@ -59,7 +63,26 @@ function parseResponse(text: string): MintayParseResult {
     .replace(/\s*```$/i, '')
     .trim();
 
-  const parsed = JSON.parse(cleaned) as MintayParseResult;
+  const tryParse = (candidate: string): MintayParseResult => {
+    try {
+      return JSON.parse(candidate) as MintayParseResult;
+    } catch {
+      return JSON5.parse(candidate) as MintayParseResult;
+    }
+  };
+
+  let parsed: MintayParseResult;
+
+  try {
+    parsed = tryParse(cleaned);
+  } catch {
+    const objectMatch = cleaned.match(/\{[\s\S]*\}$/);
+    if (!objectMatch) {
+      throw new SyntaxError('Gemini response did not contain a parseable object.');
+    }
+
+    parsed = tryParse(objectMatch[0]);
+  }
 
   if (!Array.isArray(parsed.screens)) {
     throw new Error('Gemini response missing screens array.');
