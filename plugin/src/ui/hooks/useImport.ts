@@ -21,13 +21,21 @@ export interface ScreenSummary {
   componentType: string;
 }
 
+export interface RouteOption {
+  label: string;
+  path: string;
+  sourceFile?: string;
+}
+
 interface ImportState {
-  status: 'idle' | 'loading' | 'review' | 'success' | 'error';
+  status: 'idle' | 'loading' | 'route_review' | 'review' | 'success' | 'error';
   progress: number;
   statusText: string;
   error: string | null;
   successCount: number;
   screens: ScreenSummary[];
+  routeOptions: RouteOption[];
+  selectedRoutePath: string | null;
   warnings: string[];
   selectedScreenIds: number[];
 }
@@ -43,6 +51,9 @@ interface RepoPreflightResult {
   success?: boolean;
   repoId?: string;
   readiness?: 'ready' | 'limited' | 'needs_input' | 'blocked';
+  supported?: boolean;
+  supportReason?: string;
+  routeOptions?: RouteOption[];
   envVarNames?: string[];
   issues?: RuntimeIssue[];
   warnings?: string[];
@@ -66,6 +77,8 @@ const initialState: ImportState = {
   error: null,
   successCount: 0,
   screens: [],
+  routeOptions: [],
+  selectedRoutePath: null,
   warnings: [],
   selectedScreenIds: [],
 };
@@ -220,6 +233,11 @@ function formatRuntimeIssues(issues: RuntimeIssue[] | undefined, warnings: strin
 export function useImport() {
   const [state, setState] = useState<ImportState>(initialState);
   const [pendingResult, setPendingResult] = useState<MintayParseResult | null>(null);
+  const [pendingRuntime, setPendingRuntime] = useState<{
+    repoId: string;
+    backendUrl: string;
+    mode: ImportArgs['mode'];
+  } | null>(null);
 
   const loadSettings = useCallback(async (): Promise<PluginSettings> => {
     const localSettings = readLocalSettings();
@@ -271,6 +289,7 @@ export function useImport() {
 
   const resetState = useCallback(() => {
     setPendingResult(null);
+    setPendingRuntime(null);
     setState(initialState);
   }, []);
 
@@ -285,6 +304,8 @@ export function useImport() {
         successCount: message.count,
         warnings: message.warnings || [],
         screens: message.screens || [],
+        routeOptions: [],
+        selectedRoutePath: null,
         selectedScreenIds: [],
       });
     },
@@ -308,6 +329,7 @@ export function useImport() {
 
       if (!trimmedCode && !trimmedUrl) {
         setPendingResult(null);
+        setPendingRuntime(null);
         setState({
           ...initialState,
           status: 'error',
@@ -389,6 +411,13 @@ export function useImport() {
             throw new Error(preflight.error || 'Mintay could not preflight the repository runtime.');
           }
 
+          if (preflight.supported === false) {
+            throw new Error(
+              preflight.supportReason ||
+                'Mintay v1 runtime import currently supports Next.js and Vite frontend apps only.',
+            );
+          }
+
           if (preflight.readiness === 'blocked') {
             throw new Error(
               formatRuntimeIssues(preflight.issues, preflight.warnings) ||
@@ -396,74 +425,32 @@ export function useImport() {
             );
           }
 
-          setState((current) => ({
-            ...current,
-            progress: 48,
-            statusText:
-              preflight.readiness === 'needs_input'
-                ? 'The repo likely needs environment variables. Mintay is trying the launch anyway...'
-                : 'Installing dependencies and starting a live preview...',
-          }));
+          const routeOptions = Array.isArray(preflight.routeOptions) ? preflight.routeOptions : [];
+          const selectedRoutePath = routeOptions[0]?.path || '/';
 
-          const launchResponse = await fetch(`${backendUrl.replace(/\/$/, '')}/repo-runtime/launch`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              repoId: prepared.repoId,
-            }),
-            signal: controller.signal,
+          setPendingRuntime({
+            repoId: prepared.repoId,
+            backendUrl,
+            mode,
           });
-
-          const launched = (await launchResponse.json()) as {
-            success?: boolean;
-            repoId?: string;
-            error?: string;
-          };
-
-          if (!launchResponse.ok || !launched.success || !launched.repoId) {
-            const preflightContext = formatRuntimeIssues(preflight.issues, preflight.warnings);
-            throw new Error(
-              [launched.error || 'Mintay could not launch the repository preview.', preflightContext]
-                .filter(Boolean)
-                .join(' '),
-            );
-          }
-
-          setState((current) => ({
-            ...current,
-            progress: 72,
-            statusText: 'Extracting the real rendered layout from the running app...',
-          }));
-
-          const extractResponse = await fetch(`${backendUrl.replace(/\/$/, '')}/repo-runtime/extract`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              repoId: launched.repoId,
-              mode,
-            }),
-            signal: controller.signal,
+          setState({
+            status: 'route_review',
+            progress: 56,
+            statusText: 'Pick the route Mintay should launch and extract.',
+            error: null,
+            successCount: 0,
+            screens: [],
+            routeOptions,
+            selectedRoutePath,
+            warnings: [
+              ...(preflight.warnings || []),
+              ...(preflight.issues
+                ?.filter((issue) => issue.severity !== 'error')
+                .map((issue) => `${issue.message}${issue.details ? ` ${issue.details}` : ''}`) || []),
+            ],
+            selectedScreenIds: [],
           });
-
-          result = (await extractResponse.json()) as MintayParseResult;
-
-          void fetch(`${backendUrl.replace(/\/$/, '')}/repo-runtime/stop`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              repoId: launched.repoId,
-            }),
-          }).catch(() => undefined);
-
-          if (!extractResponse.ok) {
-            throw new Error(result.error || 'Mintay could not extract the rendered repository layout.');
-          }
+          return;
         } else {
           setState((current) => ({
             ...current,
@@ -521,6 +508,7 @@ export function useImport() {
                 : 'Mintay hit an unexpected error.';
 
         setPendingResult(null);
+        setPendingRuntime(null);
         setState({
           ...initialState,
           status: 'error',
@@ -559,6 +547,142 @@ export function useImport() {
       selectedScreenIds: [],
     }));
   }, []);
+
+  const selectRoute = useCallback((routePath: string) => {
+    setState((current) => ({
+      ...current,
+      selectedRoutePath: routePath,
+    }));
+  }, []);
+
+  const launchSelectedRoute = useCallback(async () => {
+    if (!pendingRuntime) {
+      return;
+    }
+
+    if (!state.selectedRoutePath) {
+      setState((current) => ({
+        ...current,
+        status: 'error',
+        error: 'Select a route before Mintay launches the live preview.',
+        statusText: 'No route selected.',
+      }));
+      return;
+    }
+
+    const settings = await loadSettings();
+    const runtimeEnvOverrides = parseRuntimeEnvInput(settings.runtimeEnv || '');
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), DEFAULT_PARSE_TIMEOUT_MS);
+
+    try {
+      setState((current) => ({
+        ...current,
+        status: 'loading',
+        progress: 68,
+        error: null,
+        statusText: `Starting ${state.selectedRoutePath} in a live preview...`,
+      }));
+
+      const launchResponse = await fetch(`${pendingRuntime.backendUrl.replace(/\/$/, '')}/repo-runtime/launch`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          repoId: pendingRuntime.repoId,
+          envOverrides: runtimeEnvOverrides,
+        }),
+        signal: controller.signal,
+      });
+
+      const launched = (await launchResponse.json()) as {
+        success?: boolean;
+        repoId?: string;
+        error?: string;
+      };
+
+      if (!launchResponse.ok || !launched.success || !launched.repoId) {
+        throw new Error(launched.error || 'Mintay could not launch the repository preview.');
+      }
+
+      setState((current) => ({
+        ...current,
+        progress: 84,
+        statusText: `Extracting rendered layout from ${state.selectedRoutePath}...`,
+      }));
+
+      const extractResponse = await fetch(`${pendingRuntime.backendUrl.replace(/\/$/, '')}/repo-runtime/extract`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          repoId: launched.repoId,
+          mode: pendingRuntime.mode,
+          routePath: state.selectedRoutePath,
+        }),
+        signal: controller.signal,
+      });
+
+      const result = (await extractResponse.json()) as MintayParseResult;
+
+      void fetch(`${pendingRuntime.backendUrl.replace(/\/$/, '')}/repo-runtime/stop`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          repoId: launched.repoId,
+        }),
+      }).catch(() => undefined);
+
+      if (!extractResponse.ok) {
+        throw new Error(result.error || 'Mintay could not extract the rendered repository layout.');
+      }
+
+      if (!result.success || !Array.isArray(result.screens) || result.screens.length === 0) {
+        throw new Error(result.error || 'Mintay could not find any screens in the selected route.');
+      }
+
+      const summaries = summarizeScreens(result.screens);
+      const selectedScreenIds = summaries.map((_screen, index) => index);
+
+      setPendingResult(result);
+      setPendingRuntime(null);
+      setState({
+        status: 'review',
+        progress: 100,
+        statusText: 'Review the detected screens and choose what to import.',
+        error: null,
+        successCount: 0,
+        screens: summaries,
+        routeOptions: [],
+        selectedRoutePath: null,
+        warnings: result.warnings || [],
+        selectedScreenIds,
+      });
+    } catch (error) {
+      const message =
+        error instanceof DOMException && error.name === 'AbortError'
+          ? 'Mintay waited too long for the selected route to start. Try another route or add the missing env vars.'
+          : error instanceof TypeError
+            ? 'Connection failed. Check your Backend URL in settings.'
+            : error instanceof Error
+              ? error.message
+              : 'Mintay hit an unexpected runtime error.';
+
+      setPendingResult(null);
+      setState((current) => ({
+        ...current,
+        status: 'error',
+        error: message,
+        statusText: 'Import failed.',
+      }));
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }, [loadSettings, pendingRuntime, state.selectedRoutePath]);
 
   const buildSelectedScreens = useCallback(() => {
     if (!pendingResult) {
@@ -612,6 +736,8 @@ export function useImport() {
     toggleScreenSelection,
     selectAllScreens,
     clearSelectedScreens,
+    selectRoute,
+    launchSelectedRoute,
     buildSelectedScreens,
   };
 }

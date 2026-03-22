@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import CodeInput from './components/CodeInput';
 import ErrorState from './components/ErrorState';
 import ProgressBar from './components/ProgressBar';
+import RoutePicker from './components/RoutePicker';
 import ScreenPreview from './components/ScreenPreview';
 import SettingsPanel from './components/SettingsPanel';
 import UrlInput from './components/UrlInput';
@@ -38,6 +39,8 @@ export default function App() {
     toggleScreenSelection,
     selectAllScreens,
     clearSelectedScreens,
+    selectRoute,
+    launchSelectedRoute,
     buildSelectedScreens,
   } = useImport();
 
@@ -166,9 +169,16 @@ export default function App() {
         className="primary-button"
         disabled={
           state.status === 'loading' ||
-          (state.status === 'review' && state.selectedScreenIds.length === 0)
+          (state.status === 'review' && state.selectedScreenIds.length === 0) ||
+          (state.status === 'route_review' && !state.selectedRoutePath)
         }
-        onClick={state.status === 'review' ? buildSelectedScreens : handleImport}
+        onClick={
+          state.status === 'review'
+            ? buildSelectedScreens
+            : state.status === 'route_review'
+              ? launchSelectedRoute
+              : handleImport
+        }
         type="button"
       >
         {state.status === 'loading' ? (
@@ -178,6 +188,8 @@ export default function App() {
           </span>
         ) : state.status === 'review' ? (
           `Import ${state.selectedScreenIds.length} Selected Screen(s)`
+        ) : state.status === 'route_review' ? (
+          `Launch ${state.selectedRoutePath || 'Selected Route'}`
         ) : (
           'Import to Figma'
         )}
@@ -203,6 +215,24 @@ export default function App() {
               onToggleScreen={toggleScreenSelection}
               screens={state.screens}
               selectedScreenIds={state.selectedScreenIds}
+              warnings={state.warnings}
+            />
+          </div>
+        )}
+
+        {state.status === 'route_review' && (
+          <div className="success-card">
+            <div className="success-header">
+              <div>
+                <h2>{state.routeOptions.length || 1} route(s) ready</h2>
+                <p>Pick the route you want Mintay to run before it extracts editable Figma screens.</p>
+              </div>
+            </div>
+
+            <RoutePicker
+              onSelectRoute={selectRoute}
+              routeOptions={state.routeOptions}
+              selectedRoutePath={state.selectedRoutePath}
               warnings={state.warnings}
             />
           </div>
@@ -253,7 +283,10 @@ export default function App() {
       )}
 
       {state.status !== 'loading' &&
-      (state.status === 'success' || state.status === 'error' || state.status === 'review') ? (
+      (state.status === 'success' ||
+        state.status === 'error' ||
+        state.status === 'review' ||
+        state.status === 'route_review') ? (
         <button className="ghost-button" onClick={resetState} type="button">
           Reset status
         </button>

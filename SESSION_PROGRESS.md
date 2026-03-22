@@ -73,6 +73,11 @@ Last updated: 2026-03-22
   - runtime preparation no longer picks the first `package.json` it finds
   - Mintay now scores candidate package roots and prefers likely frontend apps over backend/server packages
   - verified locally against `https://github.com/iamichaelayomide/Mintay`: prepare now selects `/plugin` with framework `vite` instead of `/backend`
+- V1 support gate + route picker:
+  - backend preflight now marks runtime support explicitly and blocks non-Next/Vite repos for v1
+  - backend now returns route options, not just raw route file candidates
+  - plugin repo imports now pause at a route picker before launch/extract
+  - selected route is then launched and extracted, instead of immediately trying to run the whole repo flow
 
 ## What still needs to happen
 

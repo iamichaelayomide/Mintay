@@ -27,7 +27,14 @@ interface RepoPrepareResult {
   installCommand: string;
   devCommand: string | null;
   routeCandidates: string[];
+  routeOptions: RouteOption[];
   warnings: string[];
+}
+
+interface RouteOption {
+  label: string;
+  path: string;
+  sourceFile?: string;
 }
 
 interface RuntimeIssue {
@@ -40,7 +47,8 @@ interface RuntimeIssue {
     | 'large_repo'
     | 'install_failed'
     | 'preview_start_failed'
-    | 'preview_timeout';
+    | 'preview_timeout'
+    | 'unsupported_framework';
   severity: 'info' | 'warning' | 'error';
   message: string;
   details?: string;
@@ -58,9 +66,12 @@ interface RepoPreflightResult {
   installCommand: string;
   devCommand: string | null;
   routeCandidates: string[];
+  routeOptions: RouteOption[];
   envVarNames: string[];
   issues: RuntimeIssue[];
   warnings: string[];
+  supported: boolean;
+  supportReason?: string;
 }
 
 interface RepoLaunchResult {
@@ -72,6 +83,7 @@ interface RepoLaunchResult {
   framework: string;
   packageManager: 'npm' | 'pnpm' | 'yarn';
   routeCandidates: string[];
+  routeOptions: RouteOption[];
   warnings: string[];
   logs: string[];
 }
@@ -85,6 +97,7 @@ interface RuntimeSession {
   installCommand: string;
   devCommand: string | null;
   routeCandidates: string[];
+  routeOptions: RouteOption[];
   warnings: string[];
   status: 'prepared' | 'installing' | 'starting' | 'running' | 'failed' | 'stopped';
   process: ChildProcess | null;
@@ -569,6 +582,81 @@ async function listRouteCandidates(projectRoot: string, framework: string): Prom
   return Array.from(new Set(candidates));
 }
 
+function normalizeRoutePath(value: string) {
+  const normalized = value.replace(/\\/g, '/').replace(/\/+/g, '/');
+  if (!normalized.startsWith('/')) {
+    return `/${normalized}`;
+  }
+  return normalized;
+}
+
+function toRoutePathFromFile(relativePath: string, framework: string): string | null {
+  const normalized = relativePath.replace(/\\/g, '/');
+
+  if (framework === 'next') {
+    let route = normalized;
+    route = route.replace(/^src\//, '');
+    route = route.replace(/^app\//, '');
+    route = route.replace(/^pages\//, '');
+    route = route.replace(/\/page\.(tsx|ts|jsx|js|html)$/i, '');
+    route = route.replace(/^index\.(tsx|ts|jsx|js|html)$/i, '');
+    route = route.replace(/\/index\.(tsx|ts|jsx|js|html)$/i, '');
+    route = route.replace(/\.(tsx|ts|jsx|js|html)$/i, '');
+
+    if (!route || route === 'page') {
+      return '/';
+    }
+
+    if (route.startsWith('api/')) {
+      return null;
+    }
+
+    return normalizeRoutePath(route);
+  }
+
+  if (framework === 'vite') {
+    if (/^(src\/)?pages\//i.test(normalized)) {
+      let route = normalized.replace(/^src\//, '').replace(/^pages\//, '');
+      route = route.replace(/^index\.(tsx|ts|jsx|js|html)$/i, '');
+      route = route.replace(/\/index\.(tsx|ts|jsx|js|html)$/i, '');
+      route = route.replace(/\.(tsx|ts|jsx|js|html)$/i, '');
+      return route ? normalizeRoutePath(route) : '/';
+    }
+
+    return '/';
+  }
+
+  return null;
+}
+
+function buildRouteOptions(routeCandidates: string[], framework: string): RouteOption[] {
+  const options = new Map<string, RouteOption>();
+
+  for (const candidate of routeCandidates) {
+    const routePath = toRoutePathFromFile(candidate, framework);
+    if (!routePath) {
+      continue;
+    }
+
+    if (!options.has(routePath)) {
+      options.set(routePath, {
+        label: routePath === '/' ? 'Home /' : routePath,
+        path: routePath,
+        sourceFile: candidate,
+      });
+    }
+  }
+
+  if ((framework === 'vite' || framework === 'next') && !options.has('/')) {
+    options.set('/', {
+      label: 'Home /',
+      path: '/',
+    });
+  }
+
+  return Array.from(options.values()).slice(0, MAX_ROUTE_CANDIDATES);
+}
+
 async function collectPrefightScanFiles(projectRoot: string): Promise<string[]> {
   const files: string[] = [];
   const queue = [
@@ -666,6 +754,10 @@ async function buildPreflightReport(session: RuntimeSession, pkg: PackageJsonSha
   const issues: RuntimeIssue[] = [];
   const warnings = [...session.warnings];
   const envVarNames = await detectEnvVarNames(session.projectRoot, pkg);
+  const supported = session.framework === 'next' || session.framework === 'vite';
+  const supportReason = supported
+    ? undefined
+    : 'Mintay v1 runtime import currently supports Next.js and Vite frontend apps only.';
 
   if (!session.devCommand) {
     issues.push({
@@ -690,6 +782,15 @@ async function buildPreflightReport(session: RuntimeSession, pkg: PackageJsonSha
       code: 'unknown_framework',
       severity: 'warning',
       message: 'Framework detection is unknown, so Mintay may need a fallback launch strategy.',
+    });
+  }
+
+  if (!supported) {
+    issues.push({
+      code: 'unsupported_framework',
+      severity: 'error',
+      message: supportReason || 'Mintay v1 runtime import currently supports Next.js and Vite frontend apps only.',
+      details: `Detected framework: ${session.framework}.`,
     });
   }
 
@@ -740,9 +841,12 @@ async function buildPreflightReport(session: RuntimeSession, pkg: PackageJsonSha
     installCommand: session.installCommand,
     devCommand: session.devCommand,
     routeCandidates: session.routeCandidates,
+    routeOptions: session.routeOptions,
     envVarNames,
     issues,
     warnings,
+    supported,
+    supportReason,
   };
 }
 
@@ -862,6 +966,7 @@ function sanitizePrepareResult(session: RuntimeSession): RepoPrepareResult {
     installCommand: session.installCommand,
     devCommand: session.devCommand,
     routeCandidates: session.routeCandidates,
+    routeOptions: session.routeOptions,
     warnings: session.warnings,
   };
 }
@@ -876,6 +981,7 @@ function sanitizeLaunchResult(session: RuntimeSession): RepoLaunchResult {
     framework: session.framework,
     packageManager: session.packageManager,
     routeCandidates: session.routeCandidates,
+    routeOptions: session.routeOptions,
     warnings: session.warnings,
     logs: session.logs.slice(-40),
   };
@@ -1015,6 +1121,7 @@ export const repoRuntimeService = {
       const framework = detectFramework(pkg);
       const devCommand = detectDevCommand(pkg, packageManager);
       const routeCandidates = await listRouteCandidates(projectRoot, framework);
+      const routeOptions = buildRouteOptions(routeCandidates, framework);
       const warnings: string[] = [];
 
       if (!devCommand) {
@@ -1036,6 +1143,7 @@ export const repoRuntimeService = {
         installCommand: resolveInstallCommand(packageManager),
         devCommand,
         routeCandidates,
+        routeOptions,
         warnings,
         status: 'prepared',
         process: null,
@@ -1146,6 +1254,7 @@ export const repoRuntimeService = {
       framework: session.framework,
       packageManager: session.packageManager,
       routeCandidates: session.routeCandidates,
+      routeOptions: session.routeOptions,
       warnings: session.warnings,
       logs: session.logs.slice(-40),
       error: session.lastError,
