@@ -1,5 +1,18 @@
 import axios from 'axios';
 
+const JSZip = require('jszip') as {
+  loadAsync(data: Buffer): Promise<{
+    files: Record<
+      string,
+      {
+        dir: boolean;
+        name: string;
+        async(type: 'text'): Promise<string>;
+      }
+    >;
+  }>;
+};
+
 type GithubTarget =
   | {
       kind: 'raw';
@@ -328,6 +341,79 @@ function buildRepoDigest(files: ResolvedGithubFile[]): string {
   return sections.join('\n\n');
 }
 
+async function loadRepoArchive(
+  owner: string,
+  repo: string,
+  branch: string,
+  dirPath: string,
+): Promise<ResolvedGithubFile[]> {
+  const response = await axios.get<ArrayBuffer>(
+    `https://codeload.github.com/${owner}/${repo}/zip/refs/heads/${branch}`,
+    {
+      timeout: 30000,
+      responseType: 'arraybuffer',
+      headers: {
+        'User-Agent': 'mintay-backend',
+      },
+      maxContentLength: 50_000_000,
+      maxBodyLength: 50_000_000,
+    },
+  );
+
+  const zip = await JSZip.loadAsync(Buffer.from(response.data));
+  const normalizedDirPath = dirPath.replace(/^\/+|\/+$/g, '').toLowerCase();
+  const resolvedFiles: ResolvedGithubFile[] = [];
+
+  const entries = Object.values(zip.files).filter((entry) => !entry.dir);
+  for (const entry of entries) {
+    const parts = entry.name.split('/').filter(Boolean);
+    if (parts.length < 2) {
+      continue;
+    }
+
+    const repoRelativePath = parts.slice(1).join('/');
+    const lowerPath = repoRelativePath.toLowerCase();
+
+    if (
+      lowerPath.includes('/node_modules/') ||
+      lowerPath.startsWith('node_modules/') ||
+      lowerPath.includes('/.next/') ||
+      lowerPath.startsWith('.next/') ||
+      lowerPath.includes('/dist/') ||
+      lowerPath.startsWith('dist/')
+    ) {
+      continue;
+    }
+
+    if (normalizedDirPath && lowerPath !== normalizedDirPath && !lowerPath.startsWith(`${normalizedDirPath}/`)) {
+      continue;
+    }
+
+    if (!shouldIncludeFile(repoRelativePath)) {
+      continue;
+    }
+
+    const content = await entry.async('text');
+    if (!content.trim()) {
+      continue;
+    }
+
+    resolvedFiles.push({
+      path: repoRelativePath,
+      content,
+      score: scorePath(repoRelativePath),
+    });
+
+    if (resolvedFiles.length >= MAX_FETCHED_FILES) {
+      break;
+    }
+  }
+
+  return resolvedFiles
+    .sort((left, right) => right.score - left.score)
+    .slice(0, MAX_FETCHED_FILES);
+}
+
 export const githubService = {
   async fetchFromUrl(url: string): Promise<string> {
     const target = parseGithubTarget(url);
@@ -349,24 +435,39 @@ export const githubService = {
             ? target.branch
             : await fetchDefaultBranch(target.owner, target.repo);
         const dirPath = target.kind === 'tree' ? target.path : '';
-        const files = await collectFilesFromDirectory(
-          target.owner,
-          target.repo,
-          branch,
-          dirPath,
-        );
 
-        if (files.length === 0) {
-          throw new Error('No supported frontend files were found in that GitHub location.');
+        let resolvedFiles: ResolvedGithubFile[];
+
+        try {
+          const files = await collectFilesFromDirectory(
+            target.owner,
+            target.repo,
+            branch,
+            dirPath,
+          );
+
+          if (files.length === 0) {
+            throw new Error('No supported frontend files were found in that GitHub location.');
+          }
+
+          resolvedFiles = await Promise.all(
+            files.map(async (file) => ({
+              path: file.path,
+              score: scorePath(file.path),
+              content: await fetchText(file.download_url || ''),
+            })),
+          );
+        } catch (error) {
+          if (!axios.isAxiosError(error) || error.response?.status !== 403) {
+            throw error;
+          }
+
+          resolvedFiles = await loadRepoArchive(target.owner, target.repo, branch, dirPath);
         }
 
-        const resolvedFiles = await Promise.all(
-          files.map(async (file) => ({
-            path: file.path,
-            score: scorePath(file.path),
-            content: await fetchText(file.download_url || ''),
-          })),
-        );
+        if (resolvedFiles.length === 0) {
+          throw new Error('No supported frontend files were found in that GitHub location.');
+        }
 
         return buildRepoDigest(resolvedFiles);
       }
