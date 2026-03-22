@@ -24,8 +24,9 @@ parseRoute.post('/', async (req: Request, res: Response) => {
     if (githubUrl) {
       try {
         rawCode = await githubService.fetchFromUrl(githubUrl);
-      } catch {
-        return res.status(400).json({ success: false, error: 'Could not fetch from GitHub URL' });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Could not fetch from GitHub URL';
+        return res.status(400).json({ success: false, error: message });
       }
     }
 
