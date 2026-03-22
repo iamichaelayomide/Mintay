@@ -14,6 +14,7 @@ type ScreenMode = 'AUTO' | 'MOBILE' | 'DESKTOP' | 'TABLET';
 const DEFAULT_SETTINGS = {
   apiKey: '',
   backendUrl: 'https://mintay.onrender.com',
+  runtimeEnv: '',
 };
 
 export default function App() {

@@ -94,6 +94,7 @@ interface RuntimeSession {
   lastError: string | null;
   lastFailureCode: RuntimeIssueCode | null;
   preflight: RepoPreflightResult | null;
+  envOverrides: Record<string, string>;
 }
 
 type GithubRepoTarget = {
@@ -528,6 +529,20 @@ function reservePort() {
   return port;
 }
 
+function sanitizeEnvOverrides(input: Record<string, string> | undefined): Record<string, string> {
+  const normalized: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(input || {})) {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
+      continue;
+    }
+
+    normalized[key] = String(value ?? '');
+  }
+
+  return normalized;
+}
+
 function getShellInvocation(command: string) {
   if (process.platform === 'win32') {
     return {
@@ -743,6 +758,7 @@ export const repoRuntimeService = {
         lastError: null,
         lastFailureCode: null,
         preflight: null,
+        envOverrides: {},
       };
 
       session.preflight = await buildPreflightReport(session, pkg);
@@ -756,11 +772,13 @@ export const repoRuntimeService = {
     }
   },
 
-  async launch(repoId: string): Promise<RepoLaunchResult> {
+  async launch(repoId: string, envOverrides?: Record<string, string>): Promise<RepoLaunchResult> {
     const session = runtimeSessions.get(repoId);
     if (!session) {
       throw new Error('Runtime session not found. Prepare the repository first.');
     }
+
+    session.envOverrides = sanitizeEnvOverrides(envOverrides);
 
     if (!session.devCommand) {
       session.lastFailureCode = 'missing_script';
@@ -794,6 +812,7 @@ export const repoRuntimeService = {
       cwd: session.projectRoot,
       env: {
         ...process.env,
+        ...session.envOverrides,
         PORT: String(session.port),
         HOST: '127.0.0.1',
         BROWSER: 'none',

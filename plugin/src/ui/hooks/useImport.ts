@@ -4,6 +4,7 @@ import type { MintayParseResult, MintayScreen } from '@shared/types/mintaySchema
 export interface PluginSettings {
   apiKey: string;
   backendUrl: string;
+  runtimeEnv: string;
 }
 
 interface ImportArgs {
@@ -55,6 +56,7 @@ const DEFAULT_PARSE_TIMEOUT_MS = 1800000;
 const defaultSettings: PluginSettings = {
   apiKey: '',
   backendUrl: DEFAULT_BACKEND_URL,
+  runtimeEnv: '',
 };
 
 const initialState: ImportState = {
@@ -86,6 +88,7 @@ function readLocalSettings(): PluginSettings {
         typeof parsed.backendUrl === 'string' && parsed.backendUrl.trim()
           ? parsed.backendUrl
           : DEFAULT_BACKEND_URL,
+      runtimeEnv: typeof parsed.runtimeEnv === 'string' ? parsed.runtimeEnv : '',
     };
   } catch {
     return defaultSettings;
@@ -96,6 +99,7 @@ function writeLocalSettings(settings: PluginSettings): PluginSettings {
   const normalized = {
     apiKey: settings.apiKey || '',
     backendUrl: settings.backendUrl?.trim() || DEFAULT_BACKEND_URL,
+    runtimeEnv: settings.runtimeEnv || '',
   };
 
   try {
@@ -111,7 +115,35 @@ function mergeSettings(primary: PluginSettings, fallback: PluginSettings): Plugi
   return {
     apiKey: primary.apiKey || fallback.apiKey || '',
     backendUrl: primary.backendUrl?.trim() || fallback.backendUrl || DEFAULT_BACKEND_URL,
+    runtimeEnv: primary.runtimeEnv || fallback.runtimeEnv || '',
   };
+}
+
+function parseRuntimeEnvInput(input: string): Record<string, string> {
+  const envOverrides: Record<string, string> = {};
+
+  for (const rawLine of input.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) {
+      continue;
+    }
+
+    const separatorIndex = line.indexOf('=');
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    const value = line.slice(separatorIndex + 1).trim();
+
+    if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
+      continue;
+    }
+
+    envOverrides[key] = value.replace(/^['"]|['"]$/g, '');
+  }
+
+  return envOverrides;
 }
 
 function requestPluginData<T>(type: string, data?: unknown, expectedType?: string): Promise<T> {
@@ -203,6 +235,7 @@ export function useImport() {
           {
             apiKey: pluginSettings.apiKey || '',
             backendUrl: pluginSettings.backendUrl?.trim() || DEFAULT_BACKEND_URL,
+            runtimeEnv: pluginSettings.runtimeEnv || '',
           },
           localSettings,
         ),
@@ -226,6 +259,7 @@ export function useImport() {
           {
             apiKey: pluginSettings.apiKey || '',
             backendUrl: pluginSettings.backendUrl?.trim() || DEFAULT_BACKEND_URL,
+            runtimeEnv: pluginSettings.runtimeEnv || '',
           },
           normalized,
         ),
@@ -296,6 +330,7 @@ export function useImport() {
         : await loadSettings();
 
       const backendUrl = settings.backendUrl?.trim() || DEFAULT_BACKEND_URL;
+      const runtimeEnvOverrides = parseRuntimeEnvInput(settings.runtimeEnv || '');
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), DEFAULT_PARSE_TIMEOUT_MS);
 
@@ -343,6 +378,7 @@ export function useImport() {
             },
             body: JSON.stringify({
               repoId: prepared.repoId,
+              envOverrides: runtimeEnvOverrides,
             }),
             signal: controller.signal,
           });

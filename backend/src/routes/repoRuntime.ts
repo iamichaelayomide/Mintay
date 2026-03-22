@@ -22,13 +22,16 @@ repoRuntimeRoute.post('/prepare', async (req: Request, res: Response) => {
 
 repoRuntimeRoute.post('/launch', async (req: Request, res: Response) => {
   try {
-    const { repoId } = req.body as { repoId?: string };
+    const { repoId, envOverrides } = req.body as {
+      repoId?: string;
+      envOverrides?: Record<string, string>;
+    };
 
     if (!repoId) {
       return res.status(400).json({ success: false, error: 'Provide a repoId.' });
     }
 
-    const result = await repoRuntimeService.launch(repoId);
+    const result = await repoRuntimeService.launch(repoId, envOverrides);
     return res.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not launch repository runtime.';

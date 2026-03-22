@@ -51,6 +51,11 @@ Last updated: 2026-03-22
   - workspace/monorepo roots
   - missing lockfiles
 - Plugin GitHub runtime flow now calls preflight before launch and surfaces classified errors instead of a generic runtime failure
+- Runtime env override support added:
+  - plugin settings now include a persisted `KEY=value` textarea for repo runtime env vars
+  - sandbox stores these values in Figma client storage
+  - `/repo-runtime/launch` now accepts `envOverrides`
+  - backend injects those env vars into the runtime preview process
 
 ## What still needs to happen
 

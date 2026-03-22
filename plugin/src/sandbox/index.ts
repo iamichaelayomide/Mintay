@@ -24,7 +24,7 @@ figma.ui.onmessage = async (msg: { type?: string; data?: unknown; requestId?: st
       break;
     case 'SAVE_SETTINGS':
       await handleSaveSettings(
-        msg.data as { apiKey?: string; backendUrl?: string },
+        msg.data as { apiKey?: string; backendUrl?: string; runtimeEnv?: string },
         msg.requestId,
       );
       break;
@@ -39,6 +39,7 @@ figma.ui.onmessage = async (msg: { type?: string; data?: unknown; requestId?: st
 async function handleGetSettings(requestId?: string) {
   const apiKey = await figma.clientStorage.getAsync('mintay_api_key');
   const backendUrl = (await figma.clientStorage.getAsync('mintay_backend_url')) || DEFAULT_BACKEND_URL;
+  const runtimeEnv = (await figma.clientStorage.getAsync('mintay_runtime_env')) || '';
 
   figma.ui.postMessage({
     type: 'SETTINGS_VALUE',
@@ -46,16 +47,18 @@ async function handleGetSettings(requestId?: string) {
     data: {
       apiKey: typeof apiKey === 'string' ? apiKey : '',
       backendUrl: typeof backendUrl === 'string' ? backendUrl : DEFAULT_BACKEND_URL,
+      runtimeEnv: typeof runtimeEnv === 'string' ? runtimeEnv : '',
     },
   });
 }
 
 async function handleSaveSettings(
-  settings: { apiKey?: string; backendUrl?: string },
+  settings: { apiKey?: string; backendUrl?: string; runtimeEnv?: string },
   requestId?: string,
 ) {
   await figma.clientStorage.setAsync('mintay_api_key', settings.apiKey || '');
   await figma.clientStorage.setAsync('mintay_backend_url', settings.backendUrl || DEFAULT_BACKEND_URL);
+  await figma.clientStorage.setAsync('mintay_runtime_env', settings.runtimeEnv || '');
 
   figma.ui.postMessage({
     type: 'SETTINGS_SAVED',
@@ -63,6 +66,7 @@ async function handleSaveSettings(
     data: {
       apiKey: settings.apiKey || '',
       backendUrl: settings.backendUrl || DEFAULT_BACKEND_URL,
+      runtimeEnv: settings.runtimeEnv || '',
     },
   });
 }

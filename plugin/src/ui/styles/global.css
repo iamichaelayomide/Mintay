@@ -110,6 +110,7 @@ button {
 .ghost-button,
 .primary-button,
 .text-input,
+.text-area,
 .code-textarea,
 .select {
   border-radius: 8px;
@@ -254,11 +255,25 @@ button {
 }
 
 .text-input,
+.text-area,
 .select {
   width: 100%;
   padding: 11px 12px;
   background: var(--panel-3);
   color: var(--text);
+}
+
+.text-area {
+  min-height: 108px;
+  resize: vertical;
+  line-height: 1.5;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+.field-help {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .url-row,
