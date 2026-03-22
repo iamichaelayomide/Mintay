@@ -8,8 +8,30 @@ const distDir = path.resolve(rootDir, 'dist');
 const uiOutDir = path.resolve(distDir, 'ui');
 
 function inlineBuiltUi() {
-  const uiHtmlPath = path.resolve(uiOutDir, 'index.html');
-  return fs.existsSync(uiHtmlPath) ? fs.readFileSync(uiHtmlPath, 'utf8') : '<div id="root"></div>';
+  const assetsDir = path.resolve(uiOutDir, 'assets');
+  if (!fs.existsSync(assetsDir)) {
+    return '<div id="root"></div>';
+  }
+
+  const assetFiles = fs.readdirSync(assetsDir);
+  const scriptFile = assetFiles.find((file) => file.endsWith('.js'));
+  const styleFile = assetFiles.find((file) => file.endsWith('.css'));
+  const scriptContent = scriptFile ? fs.readFileSync(path.resolve(assetsDir, scriptFile), 'utf8') : '';
+  const styleContent = styleFile ? fs.readFileSync(path.resolve(assetsDir, styleFile), 'utf8') : '';
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mintay</title>
+    <style>${styleContent}</style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>${scriptContent}<\/script>
+  </body>
+</html>`;
 }
 
 export default defineConfig(({ mode }) => {
