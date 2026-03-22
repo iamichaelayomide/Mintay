@@ -8,7 +8,7 @@
   "networkAccess": {
     "allowedDomains": [
       "http://localhost:3001",
-      "https://mintay-api.yourdomain.com"
+      "https://mintay.onrender.com"
     ]
   },
   "documentAccess": "dynamic-page"

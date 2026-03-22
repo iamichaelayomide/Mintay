@@ -38,6 +38,8 @@ GEMINI_MODEL=gemini-1.5-flash
 PORT=3001
 ```
 
+`PORT=3001` is only for local development. Hosted platforms like Render inject their own `PORT` value.
+
 ### 3. Start the backend locally
 
 ```bash
@@ -64,6 +66,7 @@ npm run build
 1. Open Mintay in Figma.
 2. Click the settings icon and add your Gemini API key.
 3. Confirm the backend URL, which defaults to `http://localhost:3001`.
+   For a deployed backend, replace this with your Render service URL.
 4. Paste frontend code or switch to the GitHub URL tab and paste a file URL.
 5. Choose `Auto`, `Mobile`, `Desktop`, or `Tablet` screen mode.
 6. Click `Import to Figma`.
@@ -96,10 +99,11 @@ Deploy steps:
 4. Set environment variables:
    `GEMINI_API_KEY`
    `GEMINI_MODEL=gemini-1.5-flash`
-   `PORT=3001`
+   Do not set `PORT` manually on Render.
 5. Build command: `npm install && npm run build`
 6. Start command: `npm start`
-7. After deployment, copy the Render URL and add it in Mintay settings.
+7. After deployment, open `https://your-render-service.onrender.com/health` and confirm you get an `ok: true` response.
+8. Copy the Render URL and add it in Mintay settings as the backend URL.
 
 Free-tier note:
 
