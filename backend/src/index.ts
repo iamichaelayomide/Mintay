@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import { analyzeRoute } from './routes/analyze';
 import { healthRoute } from './routes/health';
 import { parseRoute } from './routes/parse';
+import { repoRuntimeRoute } from './routes/repoRuntime';
 
 const app = express();
 
@@ -26,8 +27,10 @@ const limiter = rateLimit({
 
 app.use('/parse', limiter);
 app.use('/analyze', limiter);
+app.use('/repo-runtime', limiter);
 app.use('/analyze', analyzeRoute);
 app.use('/parse', parseRoute);
+app.use('/repo-runtime', repoRuntimeRoute);
 app.use('/health', healthRoute);
 
 const PORT = Number(process.env.PORT || 3001);

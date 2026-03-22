@@ -40,6 +40,7 @@ Last updated: 2026-03-22
 - Section detection is being moved off the plugin UI bundle and onto a backend `/analyze` endpoint
 - Goal: keep candidate file/section chips while shrinking the Figma plugin bundle and avoiding heavy AST parsing in the UI thread
 - Repo imports are being upgraded into a two-step flow: parse full repo -> review detected screens -> import only the selected screens into Figma
+- Runtime-execution pivot started: backend now has a `/repo-runtime/prepare` path that downloads a GitHub repo archive, extracts it to a temp workspace, detects package manager/framework/dev command, and lists candidate route files for the next runner step
 
 ## What still needs to happen
 
