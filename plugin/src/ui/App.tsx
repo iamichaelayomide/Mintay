@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import CodeInput from './components/CodeInput';
 import ErrorState from './components/ErrorState';
 import ProgressBar from './components/ProgressBar';
@@ -24,6 +24,7 @@ export default function App() {
   const [githubUrl, setGithubUrl] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState(DEFAULT_SETTINGS);
+  const settingsHydratedRef = useRef(false);
 
   const {
     state,
@@ -46,11 +47,27 @@ export default function App() {
 
   useEffect(() => {
     loadSettings()
-      .then(setSettingsDraft)
+      .then((loadedSettings) => {
+        setSettingsDraft(loadedSettings);
+        settingsHydratedRef.current = true;
+      })
       .catch(() => {
         setSettingsDraft(DEFAULT_SETTINGS);
+        settingsHydratedRef.current = true;
       });
   }, [loadSettings]);
+
+  useEffect(() => {
+    if (!settingsHydratedRef.current) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void saveSettings(settingsDraft);
+    }, 300);
+
+    return () => window.clearTimeout(timeout);
+  }, [saveSettings, settingsDraft]);
 
   const handleImport = async () => {
     await startImport({

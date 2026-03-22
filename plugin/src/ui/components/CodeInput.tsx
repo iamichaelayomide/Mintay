@@ -28,6 +28,18 @@ const SUPPORTED_EXTENSIONS = [
   '.less',
   '.json',
 ];
+const IGNORED_PATH_SEGMENTS = new Set([
+  'node_modules',
+  '.git',
+  '.next',
+  'dist',
+  'build',
+  'coverage',
+  '.turbo',
+  '.cache',
+  '.vercel',
+]);
+const MAX_LOCAL_FILES = 400;
 
 const PRIORITY_PATTERNS = [
   /(^|\/)(app|src)\/page\.(tsx|jsx|ts|js)$/i,
@@ -62,6 +74,20 @@ function formatFileSummary(files: File[]): string {
 function isSupportedFile(fileName: string): boolean {
   const lower = fileName.toLowerCase();
   return SUPPORTED_EXTENSIONS.some((extension) => lower.endsWith(extension));
+}
+
+function normalizePickedPath(file: File): string {
+  return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+}
+
+function shouldIgnorePath(filePath: string): boolean {
+  const segments = filePath
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => segment.toLowerCase());
+
+  return segments.some((segment) => IGNORED_PATH_SEGMENTS.has(segment));
 }
 
 function scoreFilePath(filePath: string): number {
@@ -99,16 +125,19 @@ function sortLoadedFiles(files: LoadedCodeFile[]): LoadedCodeFile[] {
 }
 
 async function readRegularFiles(files: File[]): Promise<LoadedCodeFile[]> {
-  const supportedFiles = files.filter((file) => isSupportedFile(file.name));
+  const supportedFiles = files
+    .filter((file) => !shouldIgnorePath(normalizePickedPath(file)))
+    .filter((file) => isSupportedFile(file.name))
+    .slice(0, MAX_LOCAL_FILES);
 
   if (supportedFiles.length === 0) {
-    throw new Error('No supported code files found. Use HTML, CSS, JS, JSX, TS, or TSX files.');
+    throw new Error('No supported source files found after skipping ignored folders like node_modules, .git, dist, and build.');
   }
 
   return Promise.all(
     supportedFiles.map(async (file) => {
       const content = await file.text();
-      const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+      const path = normalizePickedPath(file);
       return {
         name: file.name,
         path,
@@ -122,15 +151,15 @@ async function readZipFile(file: File): Promise<LoadedCodeFile[]> {
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
   const entries = Object.values(zip.files);
   const supportedEntries = entries.filter(
-    (entry) => !entry.dir && isSupportedFile(entry.name),
+    (entry) => !entry.dir && !shouldIgnorePath(entry.name) && isSupportedFile(entry.name),
   );
 
   if (supportedEntries.length === 0) {
-    throw new Error('The zip file does not contain supported code files.');
+    throw new Error('The zip file does not contain supported source files after skipping ignored folders.');
   }
 
   return Promise.all(
-    supportedEntries.map(async (entry) => ({
+    supportedEntries.slice(0, MAX_LOCAL_FILES).map(async (entry) => ({
       name: entry.name.split('/').pop() || entry.name,
       path: entry.name,
       content: (await entry.async('text')).trim(),
@@ -156,6 +185,10 @@ function buildCombinedSource(files: LoadedCodeFile[]): string {
 function buildSummary(files: LoadedCodeFile[], originalFiles: File[]): string {
   if (originalFiles.length === 1 && originalFiles[0].name.toLowerCase().endsWith('.zip')) {
     return `${files.length} code files extracted from ${originalFiles[0].name}`;
+  }
+
+  if (originalFiles.length > MAX_LOCAL_FILES) {
+    return `${files.length} source files loaded after skipping ignored folders`;
   }
 
   return formatFileSummary(originalFiles);
