@@ -13,7 +13,7 @@ type ScreenMode = 'AUTO' | 'MOBILE' | 'DESKTOP' | 'TABLET';
 
 const DEFAULT_SETTINGS = {
   apiKey: '',
-  backendUrl: 'http://localhost:3001',
+  backendUrl: 'https://mintay.onrender.com',
 };
 
 export default function App() {
@@ -52,6 +52,7 @@ export default function App() {
       code: activeTab === 'code' ? code : '',
       githubUrl: activeTab === 'url' ? githubUrl : '',
       mode: screenMode,
+      settings: settingsDraft,
     });
   };
 

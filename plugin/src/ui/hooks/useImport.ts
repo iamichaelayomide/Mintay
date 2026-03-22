@@ -9,6 +9,7 @@ interface ImportArgs {
   code?: string;
   githubUrl?: string;
   mode: 'AUTO' | 'MOBILE' | 'DESKTOP' | 'TABLET';
+  settings?: PluginSettings;
 }
 
 interface ScreenSummary {
@@ -187,7 +188,7 @@ export function useImport() {
   }, []);
 
   const startImport = useCallback(
-    async ({ code, githubUrl, mode }: ImportArgs) => {
+    async ({ code, githubUrl, mode, settings: currentSettings }: ImportArgs) => {
       const trimmedCode = code?.trim() || '';
       const trimmedUrl = githubUrl?.trim() || '';
 
@@ -208,7 +209,9 @@ export function useImport() {
         statusText: 'Loading local plugin settings…',
       });
 
-      const settings = await loadSettings();
+      const settings = currentSettings
+        ? mergeSettings(writeLocalSettings(currentSettings), await loadSettings())
+        : await loadSettings();
 
       if (!settings.apiKey) {
         setState({
