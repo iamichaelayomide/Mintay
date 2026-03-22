@@ -165,16 +165,51 @@ function parseGithubRepoTarget(url: string): GithubRepoTarget {
   };
 }
 
-async function fetchDefaultBranch(owner: string, repo: string): Promise<string> {
-  const response = await axios.get<{ default_branch: string }>(`https://api.github.com/repos/${owner}/${repo}`, {
-    timeout: 15_000,
-    headers: {
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'mintay-backend',
-    },
-  });
+async function fetchRepoArchive(
+  owner: string,
+  repo: string,
+  preferredBranch?: string,
+): Promise<{ branch: string; data: Buffer }> {
+  const candidates = Array.from(
+    new Set([preferredBranch, 'main', 'master', 'develop', 'dev'].filter(Boolean) as string[]),
+  );
 
-  return response.data.default_branch;
+  let lastError: unknown = null;
+
+  for (const branch of candidates) {
+    try {
+      const response = await axios.get<ArrayBuffer>(
+        `https://codeload.github.com/${owner}/${repo}/zip/refs/heads/${branch}`,
+        {
+          timeout: CODELOAD_TIMEOUT_MS,
+          responseType: 'arraybuffer',
+          maxContentLength: 100_000_000,
+          maxBodyLength: 100_000_000,
+          headers: {
+            'User-Agent': 'mintay-backend',
+          },
+          validateStatus: (status) => status >= 200 && status < 300,
+        },
+      );
+
+      return {
+        branch,
+        data: Buffer.from(response.data),
+      };
+    } catch (error) {
+      lastError = error;
+      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+      if (status && status !== 404) {
+        continue;
+      }
+    }
+  }
+
+  if (axios.isAxiosError(lastError) && lastError.response?.status === 403) {
+    throw new Error('GitHub blocked the repo archive request with status 403. Try again shortly or use a direct file/folder input.');
+  }
+
+  throw new Error('Could not download a repo archive from GitHub. The default branch may not be one of main/master/develop/dev, or the repository may be unavailable.');
 }
 
 async function ensureDir(dirPath: string) {
@@ -856,7 +891,8 @@ async function attemptLaunchStrategy(
 export const repoRuntimeService = {
   async prepareFromGithubUrl(url: string): Promise<RepoPrepareResult> {
     const target = parseGithubRepoTarget(url);
-    const branch = target.branch || (await fetchDefaultBranch(target.owner, target.repo));
+    const archive = await fetchRepoArchive(target.owner, target.repo, target.branch);
+    const branch = archive.branch;
     const repoId = createHash('sha1').update(`${target.owner}/${target.repo}:${branch}:${target.subdir}`).digest('hex').slice(0, 12);
     const workspacePath = path.join(os.tmpdir(), 'mintay-runtime', `${repoId}-${randomUUID()}`);
     const extractRoot = path.join(workspacePath, 'repo');
@@ -865,20 +901,7 @@ export const repoRuntimeService = {
     await ensureDir(extractRoot);
 
     try {
-      const response = await axios.get<ArrayBuffer>(
-        `https://codeload.github.com/${target.owner}/${target.repo}/zip/refs/heads/${branch}`,
-        {
-          timeout: CODELOAD_TIMEOUT_MS,
-          responseType: 'arraybuffer',
-          maxContentLength: 100_000_000,
-          maxBodyLength: 100_000_000,
-          headers: {
-            'User-Agent': 'mintay-backend',
-          },
-        },
-      );
-
-      const zip = await JSZip.loadAsync(Buffer.from(response.data));
+      const zip = await JSZip.loadAsync(archive.data);
       for (const entry of Object.values(zip.files)) {
         const segments = entry.name.split('/').filter(Boolean);
         if (segments.length < 2) {

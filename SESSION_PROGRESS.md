@@ -65,6 +65,10 @@ Last updated: 2026-03-22
   - repo preview strategies now bind to `127.0.0.1` instead of `0.0.0.0`
   - this keeps child preview ports internal to the Render container instead of exposing extra ports like `3200` to the platform scanner
   - backend now sets `trust proxy` for Render so express-rate-limit stops warning on forwarded requests
+- GitHub 403 prepare fix:
+  - repo runtime preparation no longer depends on `api.github.com/repos/:owner/:repo` to discover the default branch
+  - Mintay now tries direct repo archive downloads from `codeload.github.com` using branch candidates like `main`, `master`, `develop`, and `dev`
+  - this avoids a common hosted 403 failure mode during repo preparation
 
 ## What still needs to happen
 
